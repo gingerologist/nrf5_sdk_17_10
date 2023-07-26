@@ -104,8 +104,8 @@ static uint32_t                    m_num_connections = 0;  /**< Number of connec
  */
 static uint32_t connection_buttons_configure()
 {
-    uint32_t err_code;
-
+    uint32_t err_code = NRF_SUCCESS;
+#ifndef BSP_SIMPLE
     err_code = bsp_event_to_button_action_assign(BTN_ID_SLEEP,
                                                  BTN_ACTION_SLEEP,
                                                  BSP_EVENT_DEFAULT);
@@ -121,8 +121,8 @@ static uint32_t connection_buttons_configure()
                                                  BTN_ACTION_DISCONNECT,
                                                  BSP_EVENT_DISCONNECT);
     RETURN_ON_ERROR_NOT_INVALID_PARAM(err_code);
-
-    return NRF_SUCCESS;
+#endif
+    return err_code;
 }
 
 
@@ -133,8 +133,8 @@ static uint32_t connection_buttons_configure()
  */
 static uint32_t advertising_buttons_configure()
 {
-    uint32_t err_code;
-
+    uint32_t err_code = NRF_SUCCESS;
+#ifndef BSP_SIMPLE
     err_code = bsp_event_to_button_action_assign(BTN_ID_DISCONNECT,
                                                  BTN_ACTION_DISCONNECT,
                                                  BSP_EVENT_DEFAULT);
@@ -149,8 +149,8 @@ static uint32_t advertising_buttons_configure()
                                                  BTN_ACTION_SLEEP,
                                                  BSP_EVENT_SLEEP);
     RETURN_ON_ERROR_NOT_INVALID_PARAM(err_code);
-
-    return NRF_SUCCESS;
+#endif
+    return err_code;
 }
 
 
