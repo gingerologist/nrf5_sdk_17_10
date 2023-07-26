@@ -55,6 +55,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "SEGGER_RTT.h"
+
 #include "nordic_common.h"
 #include "nrf.h"
 #include "app_error.h"
@@ -67,12 +69,21 @@
 #include "nrf_sdh.h"
 #include "nrf_sdh_soc.h"
 #include "nrf_sdh_ble.h"
+
+#include "nrf_sdh_freertos.h"
+
 #include "app_timer.h"
 #include "fds.h"
 #include "peer_manager.h"
 #include "peer_manager_handler.h"
 #include "bsp_btn_ble.h"
-#include "sensorsim.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "timers.h"
+#include "semphr.h"
+
+// #include "sensorsim.h"
 #include "ble_conn_state.h"
 #include "nrf_ble_gatt.h"
 #include "nrf_ble_qwr.h"
@@ -82,6 +93,7 @@
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
+// APP_TIMER_V2 APP_TIMER_V2_RTC1_ENABLED removed both C/C++ and asm.
 
 #define DEVICE_NAME                     "Nordic_Template"                       /**< Name of device. Will be included in the advertising data. */
 #define MANUFACTURER_NAME               "NordicSemiconductor"                   /**< Manufacturer. Will be passed to Device Information Service. */
@@ -111,6 +123,9 @@
 
 #define DEAD_BEEF                       0xDEADBEEF                              /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
+#if NRF_LOG_ENABLED
+static TaskHandle_t m_logger_thread;                                            /**< Definition of Logger thread. */
+#endif
 
 NRF_BLE_GATT_DEF(m_gatt);                                                       /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);                                                         /**< Context for the Queued Write module.*/
@@ -129,7 +144,7 @@ static ble_uuid_t m_adv_uuids[] =                                               
 };
 
 
-static void advertising_start(bool erase_bonds);
+static void advertising_start(void * p_erase_bonds);
 
 
 /**@brief Callback function for asserts in the SoftDevice.
@@ -659,6 +674,65 @@ static void log_init(void)
     NRF_LOG_DEFAULT_BACKENDS_INIT();
 }
 
+#if NRF_LOG_ENABLED
+/**@brief Thread for handling the logger.
+ *
+ * @details This thread is responsible for processing log entries if logs are deferred.
+ *          Thread flushes all log entries and suspends. It is resumed by idle task hook.
+ *
+ * @param[in]   arg   Pointer used for passing some arbitrary information (context) from the
+ *                    osThreadCreate() call to the thread.
+ */
+static void logger_thread(void * arg)
+{
+    UNUSED_PARAMETER(arg);
+
+    while (1)
+    {
+        NRF_LOG_FLUSH();
+
+        vTaskSuspend(NULL); // Suspend myself
+    }
+}
+#endif //NRF_LOG_ENABLED
+
+#if NRF_LOG_ENABLED && NRF_LOG_DEFERRED
+void log_pending_hook( void )
+{
+    BaseType_t YieldRequired = pdFAIL;
+    if ( __get_IPSR() != 0 )
+    {
+        YieldRequired = xTaskResumeFromISR( m_logger_thread );
+        portYIELD_FROM_ISR( YieldRequired );
+    }
+    else
+    {
+        UNUSED_RETURN_VALUE(vTaskResume(m_logger_thread));
+    }
+}
+#endif
+
+//#if NRF_LOG_ENABLED && NRF_LOG_DEFERRED
+//void log_pending_hook( void )
+//{
+//    BaseType_t result = pdFAIL;
+
+//    if ( __get_IPSR() != 0 )
+//    {
+//        BaseType_t higherPriorityTaskWoken = pdFALSE;
+//        result = xTaskNotifyFromISR( m_logger_thread, 0, eSetValueWithoutOverwrite, &higherPriorityTaskWoken );
+
+//        if ( pdFAIL != result )
+//        {
+//            portYIELD_FROM_ISR( higherPriorityTaskWoken );
+//        }
+//    }
+//    else
+//    {
+//        UNUSED_RETURN_VALUE(xTaskNotify( m_logger_thread, 0, eSetValueWithoutOverwrite ));
+//    }
+//}
+//#endif
 
 /**@brief Function for initializing power management.
  */
@@ -685,30 +759,42 @@ static void idle_state_handle(void)
 
 /**@brief Function for starting advertising.
  */
-static void advertising_start(bool erase_bonds)
+static void advertising_start(void * p_erase_bonds)
 {
-    if (erase_bonds == true)
+    bool erase_bonds = *(bool*)p_erase_bonds;
+
+    if (erase_bonds)
     {
         delete_bonds();
-        // Advertising is started by PM_EVT_PEERS_DELETED_SUCEEDED event
+        // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
     }
     else
     {
         ret_code_t err_code = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-
         APP_ERROR_CHECK(err_code);
     }
 }
+
 
 
 /**@brief Function for application main entry.
  */
 int main(void)
 {
+    ret_code_t err_code;
     bool erase_bonds;
 
     // Initialize.
     log_init();
+
+ #if NRF_LOG_ENABLED
+    // Start execution.
+    if (pdPASS != xTaskCreate(logger_thread, "LOGGER", 256, NULL, 1, &m_logger_thread))
+    {
+        APP_ERROR_HANDLER(NRF_ERROR_NO_MEM);
+    }
+#endif
+
     timers_init();
     buttons_leds_init(&erase_bonds);
     power_management_init();
@@ -720,11 +806,18 @@ int main(void)
     conn_params_init();
     peer_manager_init();
 
-    // Start execution.
-    NRF_LOG_INFO("Template example started.");
     application_timers_start();
 
-    advertising_start(erase_bonds);
+    // NRF_SDH_BLE_GATT_MAX_MTU_SIZE is definedin sdk_config.h
+    err_code = nrf_ble_gatt_att_mtu_periph_set(&m_gatt, NRF_SDH_BLE_GATT_MAX_MTU_SIZE);
+    APP_ERROR_CHECK(err_code);
+
+    // Start execution.
+    // SEGGER_RTT_WriteString(0, "\n^^^ rtt ^^^\n");
+    NRF_LOG_RAW_INFO("\n^^^ sleepmon start ^^^\n");
+    nrf_sdh_freertos_init(advertising_start, &erase_bonds);
+
+    vTaskStartScheduler();
 
     // Enter main loop.
     for (;;)

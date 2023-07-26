@@ -4,10 +4,21 @@
 // CONFIG_GPIO_AS_PINRESET
 // CONFIG_NFCT_PINS_AS_GPIOS
 
+// RTT does not work yet
+#define NRF_LOG_USE_RTT
+// -DAPP_TIMER_V2,-DAPP_TIMER_V2_RTC1_ENABLED,-DCONFIG_GPIO_AS_PINRESET,
+
+#ifdef NRF_LOG_USE_RTT
 #define NRF_LOG_BACKEND_RTT_ENABLED                     1
 #define NRF_LOG_BACKEND_UART_ENABLED                    0
-
+#define NRF_LOG_BACKEND_UART_TX_PIN                     24
 #define NRF_FPRINTF_FLAG_AUTOMATIC_CR_ON_LF_ENABLED     0
+#else
+#define NRF_LOG_BACKEND_RTT_ENABLED                     0
+#define NRF_LOG_BACKEND_UART_ENABLED                    1
+#define NRF_LOG_BACKEND_UART_TX_PIN                     24
+#define NRF_FPRINTF_FLAG_AUTOMATIC_CR_ON_LF_ENABLED     1
+#endif
 
 #define BLE_EEG_ENABLED                                 1
 #define BLE_EEG_BLE_OBSERVER_PRIO                       2
