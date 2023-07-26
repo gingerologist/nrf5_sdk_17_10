@@ -48,3 +48,6 @@ RTE/
 
 # vim swap
 *.swp
+
+# gui
+*.uvguix.*
