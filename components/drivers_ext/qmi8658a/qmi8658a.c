@@ -1,7 +1,9 @@
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_log.h"
 
-// #include "FreeRTOS.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include "app_error.h"
 
@@ -38,9 +40,9 @@ const char * const qmi8658a_reg_name[] = {
   "AE_REG1", "AE_REG2"
 };
 
-const uint8_t qmi8658a_init_cfg[] = 
+const uint8_t qmi8658a_init_cfg[] =
 {
-    QMI8658A_REG_CTRL1_ENABLE,     // 0x02 big endian (i2c is always BE), 
+    QMI8658A_REG_CTRL1_ENABLE,     // 0x02 big endian (i2c is always BE),
     0x07,   // 0x03 accel scale 2g, odr 58.75Hz
     0x07,   // 0x04 gyro 16dps, odr 58.75Hz
     0x00,   // 0x05 not used
@@ -62,7 +64,10 @@ static void qmi8658a_reset(void);
 static void qmi8658a_read(uint8_t addr, uint8_t * p_data, uint8_t length);
 static void qmi8658a_write(uint8_t addr, const uint8_t * p_data, uint8_t length);
 
-static void qmi8658a_write_single(uint8_t addr, uint8_t val)
+#endif
+
+
+static void qmi8658a_write_single(qmi8658a_dev_t * p_dev, uint8_t addr, uint8_t val)
 {
     ret_code_t err_code;
     uint8_t buf[2];
@@ -72,16 +77,16 @@ static void qmi8658a_write_single(uint8_t addr, uint8_t val)
     {
         NRF_TWI_MNGR_WRITE(QMI8658A_ADDR, buf, 2, 0),
     };
-    
-    err_code = nrf_twi_mngr_perform(&m_nrf_twi_mngr,
-                                    &qmi8658a_twi_config,
+
+    err_code = nrf_twi_mngr_perform(p_dev->p_twi_mngr,
+                                    p_dev->p_twi_cfg,
                                     xfers,
                                     sizeof(xfers) / sizeof(xfers[0]),
                                     NULL);
-    APP_ERROR_CHECK(err_code);    
+    APP_ERROR_CHECK(err_code);
 }
 
-static void qmi8658a_write(uint8_t addr, const uint8_t * p_data, uint8_t length)
+static void qmi8658a_write(qmi8658a_dev_t * p_dev, uint8_t addr, const uint8_t * p_data, uint8_t length)
 {
     ret_code_t err_code;
     nrf_twi_mngr_transfer_t xfers[] =
@@ -90,57 +95,104 @@ static void qmi8658a_write(uint8_t addr, const uint8_t * p_data, uint8_t length)
         NRF_TWI_MNGR_WRITE(QMI8658A_ADDR, p_data,  length,                    0)
     };
 
-    err_code = nrf_twi_mngr_perform(&m_nrf_twi_mngr,
-                                  &qmi8658a_twi_config,
-                                  xfers,
-                                  sizeof(xfers) / sizeof(xfers[0]),
-                                  NULL);
+    err_code = nrf_twi_mngr_perform(p_dev->p_twi_mngr,
+                                    p_dev->p_twi_cfg,
+                                    xfers,
+                                    sizeof(xfers) / sizeof(xfers[0]),
+                                    NULL);
     APP_ERROR_CHECK(err_code);
 }
 
-static void qmi8658a_read(uint8_t addr, uint8_t * p_data, uint8_t length)
-{
-  ret_code_t err_code;
-
-  nrf_twi_mngr_transfer_t xfers[] =
-  {
-    NRF_TWI_MNGR_WRITE(QMI8658A_ADDR,  &addr,      1, NRF_TWI_MNGR_NO_STOP),
-    NRF_TWI_MNGR_READ (QMI8658A_ADDR, p_data, length,                    0)
-  };
-
-  err_code = nrf_twi_mngr_perform(&m_nrf_twi_mngr,
-                                  &qmi8658a_twi_config,
-                                  xfers,
-                                  sizeof(xfers) / sizeof(xfers[0]),
-                                  NULL);
-  APP_ERROR_CHECK(err_code);
-}
-
-static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
-{
-  BottomEvent_t be = { .type = BE_IMUINT2 };
-  xQueueSendFromISR(m_beq, &be, NULL);
-}
-
-static void qmi8658a_init()
+static void qmi8658a_read(qmi8658a_dev_t * p_dev, uint8_t addr, uint8_t * p_data, uint8_t length)
 {
     ret_code_t err_code;
 
-    nrf_drv_twi_config_t const config = {
-       .scl                = QMI8658A_SCL_PIN,
-       .sda                = QMI8658A_SDA_PIN,
-       .frequency          = NRF_DRV_TWI_FREQ_400K,
-       .interrupt_priority = APP_IRQ_PRIORITY_LOWEST,
-       .clear_bus_init     = false
+    nrf_twi_mngr_transfer_t xfers[] =
+    {
+        NRF_TWI_MNGR_WRITE(QMI8658A_ADDR,  &addr,      1, NRF_TWI_MNGR_NO_STOP),
+        NRF_TWI_MNGR_READ (QMI8658A_ADDR, p_data, length,                    0)
     };
 
-    err_code = nrf_twi_mngr_init(&m_nrf_twi_mngr, &config);
+    err_code = nrf_twi_mngr_perform(p_dev->p_twi_mngr,
+                                    p_dev->p_twi_cfg,
+                                    xfers,
+                                    sizeof(xfers) / sizeof(xfers[0]),
+                                    NULL);
     APP_ERROR_CHECK(err_code);
-    
+}
+
+static void qmi8658a_reset(qmi8658a_dev_t * p_dev)
+{
+//    uint8_t val = QMI8658A_REG_RESET_VAL;
+//    qmi8658a_write(QMI8658A_REG_RESET, &val, 1);
+
+
+    qmi8658a_write_single(p_dev, 0x60, 0xB0);
+    vTaskDelay(10);
+
+    uint8_t val = 0xff;
+    qmi8658a_read(p_dev, QMI8658A_REG_CTRL1, &val, 1);
+
+    NRF_LOG_INFO("qmi8658a reset, CTRL1 0x%02x (expect 0x20)", val);
+}
+
+static void qmi8658a_config(qmi8658a_dev_t * p_dev)
+{
+    qmi8658a_write(p_dev, QMI8658A_REG_CTRL1, qmi8658a_init_cfg, sizeof(qmi8658a_init_cfg));
+
+    uint8_t out_data[sizeof(qmi8658a_init_cfg)] = {0};
+    qmi8658a_read(p_dev, 0x02, out_data, sizeof(out_data));
+    for (int i = 0; i < sizeof(out_data); i++)
+    {
+      NRF_LOG_INFO("qmi8658a config reg 0x%02x: 0x%02x", i + 0x02, out_data[i]);
+    }
+}
+
+static void qmi8658a_enable(qmi8658a_dev_t * p_dev)
+{
+//    uint8_t val = QMI8658A_REG_CTRL1_ENABLE;        // enable sensor and int2
+//    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);
+
+    qmi8658a_write_single(p_dev, QMI8658A_REG_CTRL1, QMI8658A_REG_CTRL1_ENABLE);
+
+    uint8_t val = 0xff;
+    qmi8658a_read(p_dev, QMI8658A_REG_CTRL1, &val, 1);
+
+    NRF_LOG_INFO("qmi8658a enabled, CTRL1 0x%02x (expect 0x%02x)", val, QMI8658A_REG_CTRL1_ENABLE);
+}
+
+static void qmi8658a_disable(qmi8658a_dev_t * p_dev)
+{
+//    uint8_t val = QMI8658A_REG_CTRL1_DISABLE;       // disable sensor and int2
+//    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);
+
+    qmi8658a_write_single(p_dev, QMI8658A_REG_CTRL1, QMI8658A_REG_CTRL1_DISABLE);
+
+    uint8_t val = 0xff;
+    qmi8658a_read(p_dev, QMI8658A_REG_CTRL1, &val, 1);
+
+    NRF_LOG_INFO("qmi8658a disabled, CTRL1 0x%02x (expect 0x%02x)", val, QMI8658A_REG_CTRL1_DISABLE);
+}
+
+void qmi8658a_init(qmi8658a_dev_t * p_dev)
+{
+    ret_code_t err_code;
+
+//    nrf_drv_twi_config_t const config = {
+//       .scl                = QMI8658A_SCL_PIN,
+//       .sda                = QMI8658A_SDA_PIN,
+//       .frequency          = NRF_DRV_TWI_FREQ_400K,
+//       .interrupt_priority = APP_IRQ_PRIORITY_LOWEST,
+//       .clear_bus_init     = false
+//    };
+
+    err_code = nrf_twi_mngr_init(p_dev->p_twi_mngr, p_dev->p_twi_cfg);
+    APP_ERROR_CHECK(err_code);
+
 //    qmi8658a_write(0x02, qmi8658a_init_cfg, sizeof(qmi8658a_init_cfg));
 
 //    vTaskDelay(1);
-//    
+//
 //    uint8_t out_data[sizeof(qmi8658a_init_cfg)] = {0};
 //    qmi8658a_read(0x02, out_data, sizeof(out_data));
 //    for (int i = 0; i < sizeof(out_data); i++)
@@ -149,65 +201,36 @@ static void qmi8658a_init()
 //    }
     // qmi8658a_reset();
     // vTaskDelay(1);
-    qmi8658a_disable();
+
+
+    qmi8658a_disable(p_dev);
 
     // set int2 to input, high accu (IN_EVENT, instead of PORT_EVENT)
-    nrfx_gpiote_in_config_t int2_cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_HITOLO(true);
-    err_code = nrfx_gpiote_in_init(QMI8658A_INT2_PIN, &int2_cfg, qmi8658a_int2_handler);
-    APP_ERROR_CHECK(err_code);
-}
+    nrfx_gpiote_in_config_t in_cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_HITOLO(true);
+    // err_code = nrfx_gpiote_in_init(QMI8658A_INT2_PIN, &int2_cfg, qmi8658a_int2_handler);
+    // APP_ERROR_CHECK(err_code);
 
-static void qmi8658a_reset()
-{
-//    uint8_t val = QMI8658A_REG_RESET_VAL;
-//    qmi8658a_write(QMI8658A_REG_RESET, &val, 1);
-    
-    
-    qmi8658a_write_single(0x60, 0xB0);
-    vTaskDelay(10);
-    
-    uint8_t val = 0xff;
-    qmi8658a_read(QMI8658A_REG_CTRL1, &val, 1);
-    
-    NRF_LOG_INFO("qmi8658a reset, CTRL1 0x%02x (expect 0x20)", val);
-}
-
-static void qmi8658a_config()
-{    
-    qmi8658a_write(QMI8658A_REG_CTRL1, qmi8658a_init_cfg, sizeof(qmi8658a_init_cfg));
-
-    uint8_t out_data[sizeof(qmi8658a_init_cfg)] = {0};
-    qmi8658a_read(0x02, out_data, sizeof(out_data));
-    for (int i = 0; i < sizeof(out_data); i++)
+    if (p_dev->int1_evt_handler == NULL && p_dev->int2_evt_handler == NULL)
     {
-      NRF_LOG_INFO("qmi8658a config reg 0x%02x: 0x%02x", i + 0x02, out_data[i]);
+        return;
+    }
+
+    if (!nrfx_gpiote_is_init())
+    {
+        err_code = nrfx_gpiote_init();
+        APP_ERROR_CHECK(err_code);
+    }
+
+    if (p_dev->int1_evt_handler)
+    {
+        err_code = nrfx_gpiote_in_init(p_dev->int1_pin, &in_cfg, p_dev->int1_evt_handler);
+        APP_ERROR_CHECK(err_code);
+    }
+
+    if (p_dev->int2_evt_handler)
+    {
+        err_code = nrfx_gpiote_in_init(p_dev->int2_pin, &in_cfg, p_dev->int2_evt_handler);
+        APP_ERROR_CHECK(err_code);
     }
 }
 
-static void qmi8658a_enable()
-{
-//    uint8_t val = QMI8658A_REG_CTRL1_ENABLE;        // enable sensor and int2
-//    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);
-    
-    qmi8658a_write_single(QMI8658A_REG_CTRL1, QMI8658A_REG_CTRL1_ENABLE);
-    
-    uint8_t val = 0xff;
-    qmi8658a_read(QMI8658A_REG_CTRL1, &val, 1);
-    
-    NRF_LOG_INFO("qmi8658a enabled, CTRL1 0x%02x (expect 0x%02x)", val, QMI8658A_REG_CTRL1_ENABLE);
-}
-
-static void qmi8658a_disable()
-{
-//    uint8_t val = QMI8658A_REG_CTRL1_DISABLE;       // disable sensor and int2
-//    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);
-    
-    qmi8658a_write_single(QMI8658A_REG_CTRL1, QMI8658A_REG_CTRL1_DISABLE);
-    
-    uint8_t val = 0xff;
-    qmi8658a_read(QMI8658A_REG_CTRL1, &val, 1);
-    
-    NRF_LOG_INFO("qmi8658a disabled, CTRL1 0x%02x (expect 0x%02x)", val, QMI8658A_REG_CTRL1_DISABLE);
-}
-
-#endif
