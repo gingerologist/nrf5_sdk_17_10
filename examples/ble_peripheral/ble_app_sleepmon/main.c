@@ -114,14 +114,14 @@
 #define NEXT_CONN_PARAMS_UPDATE_DELAY   APP_TIMER_TICKS(30000)                  /**< Time between each call to sd_ble_gap_conn_param_update after the first call (30 seconds). */
 #define MAX_CONN_PARAMS_UPDATE_COUNT    3                                       /**< Number of attempts before giving up the connection parameter negotiation. */
 
-#define SEC_PARAM_BOND                  1                                       /**< Perform bonding. */
-#define SEC_PARAM_MITM                  0                                       /**< Man In The Middle protection not required. */
-#define SEC_PARAM_LESC                  0                                       /**< LE Secure Connections not enabled. */
-#define SEC_PARAM_KEYPRESS              0                                       /**< Keypress notifications not enabled. */
-#define SEC_PARAM_IO_CAPABILITIES       BLE_GAP_IO_CAPS_NONE                    /**< No I/O capabilities. */
-#define SEC_PARAM_OOB                   0                                       /**< Out Of Band data not available. */
-#define SEC_PARAM_MIN_KEY_SIZE          7                                       /**< Minimum encryption key size. */
-#define SEC_PARAM_MAX_KEY_SIZE          16                                      /**< Maximum encryption key size. */
+//#define SEC_PARAM_BOND                  1                                       /**< Perform bonding. */
+//#define SEC_PARAM_MITM                  0                                       /**< Man In The Middle protection not required. */
+//#define SEC_PARAM_LESC                  0                                       /**< LE Secure Connections not enabled. */
+//#define SEC_PARAM_KEYPRESS              0                                       /**< Keypress notifications not enabled. */
+//#define SEC_PARAM_IO_CAPABILITIES       BLE_GAP_IO_CAPS_NONE                    /**< No I/O capabilities. */
+//#define SEC_PARAM_OOB                   0                                       /**< Out Of Band data not available. */
+//#define SEC_PARAM_MIN_KEY_SIZE          7                                       /**< Minimum encryption key size. */
+//#define SEC_PARAM_MAX_KEY_SIZE          16                                      /**< Maximum encryption key size. */
 
 #define DEAD_BEEF                       0xDEADBEEF                              /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
@@ -543,30 +543,30 @@ static void ble_stack_init(void)
  */
 static void peer_manager_init(void)
 {
-    ble_gap_sec_params_t sec_param;
+//    ble_gap_sec_params_t sec_param;
     ret_code_t           err_code;
 
     err_code = pm_init();
     APP_ERROR_CHECK(err_code);
 
-    memset(&sec_param, 0, sizeof(ble_gap_sec_params_t));
+//    memset(&sec_param, 0, sizeof(ble_gap_sec_params_t));
 
-    // Security parameters to be used for all security procedures.
-    sec_param.bond           = SEC_PARAM_BOND;
-    sec_param.mitm           = SEC_PARAM_MITM;
-    sec_param.lesc           = SEC_PARAM_LESC;
-    sec_param.keypress       = SEC_PARAM_KEYPRESS;
-    sec_param.io_caps        = SEC_PARAM_IO_CAPABILITIES;
-    sec_param.oob            = SEC_PARAM_OOB;
-    sec_param.min_key_size   = SEC_PARAM_MIN_KEY_SIZE;
-    sec_param.max_key_size   = SEC_PARAM_MAX_KEY_SIZE;
-    sec_param.kdist_own.enc  = 1;
-    sec_param.kdist_own.id   = 1;
-    sec_param.kdist_peer.enc = 1;
-    sec_param.kdist_peer.id  = 1;
+//    // Security parameters to be used for all security procedures.
+//    sec_param.bond           = SEC_PARAM_BOND;
+//    sec_param.mitm           = SEC_PARAM_MITM;
+//    sec_param.lesc           = SEC_PARAM_LESC;
+//    sec_param.keypress       = SEC_PARAM_KEYPRESS;
+//    sec_param.io_caps        = SEC_PARAM_IO_CAPABILITIES;
+//    sec_param.oob            = SEC_PARAM_OOB;
+//    sec_param.min_key_size   = SEC_PARAM_MIN_KEY_SIZE;
+//    sec_param.max_key_size   = SEC_PARAM_MAX_KEY_SIZE;
+//    sec_param.kdist_own.enc  = 1;
+//    sec_param.kdist_own.id   = 1;
+//    sec_param.kdist_peer.enc = 1;
+//    sec_param.kdist_peer.id  = 1;
 
-    err_code = pm_sec_params_set(&sec_param);
-    APP_ERROR_CHECK(err_code);
+//    err_code = pm_sec_params_set(&sec_param);
+//    APP_ERROR_CHECK(err_code);
 
     err_code = pm_register(pm_evt_handler);
     APP_ERROR_CHECK(err_code);
