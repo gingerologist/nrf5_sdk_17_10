@@ -152,7 +152,7 @@ static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;                        
 #define TWI1_MAX_PENDING_TRANSACTIONS   4
 #define QMI8658A_SCL_PIN                21      // P0.21
 #define QMI8658A_SDA_PIN                19      // P0.19
-#define QMI8658A_INT1_PIN               18      // P0.18
+#define QMI8658A_INT1_PIN               20      // P0.20
 #define QMI8658A_INT2_PIN               22      // P0.22
 
 // use twi manager instead
@@ -162,9 +162,20 @@ static nrf_drv_twi_config_t const qmi8658a_twi_config = {
     .scl                = QMI8658A_SCL_PIN,
     .sda                = QMI8658A_SDA_PIN,
     .frequency          = NRF_DRV_TWI_FREQ_400K,
-    .interrupt_priority = TWI_DEFAULT_CONFIG_IRQ_PRIORITY,
+    .interrupt_priority = TWI_DEFAULT_CONFIG_IRQ_PRIORITY,  // todo
     .clear_bus_init     = TWI_DEFAULT_CONFIG_CLR_BUS_INIT,
     .hold_bus_uninit    = TWI_DEFAULT_CONFIG_HOLD_BUS_UNINIT,
+};
+
+static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action);
+
+static qmi8658a_dev_t qmi8658a_dev = {
+    .p_twi_mngr         = &m_nrf_twi_mngr,
+    .p_twi_cfg          = &qmi8658a_twi_config,
+    .int1_pin           = QMI8658A_INT1_PIN,
+    .int1_evt_handler   = NULL,
+    .int2_pin           = QMI8658A_INT2_PIN,
+    .int2_evt_handler   = qmi8658a_int2_handler
 };
 
 #define SPI0_INSTANCE_ID                0
@@ -219,6 +230,12 @@ typedef struct BottomEvent
 
 static TaskHandle_t           m_bottom_thread;
 QueueHandle_t                 m_beq;
+
+static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
+{
+    BottomEvent_t be = { .type = BE_IMUINT2 };
+    xQueueSendFromISR(m_beq, &be, NULL);
+}
 
 /* YOUR_JOB: Declare all services structure your application is using
  *  BLE_XYZ_DEF(m_xyz);
@@ -884,6 +901,7 @@ static void bottom_thread(void * arg)
     NRF_LOG_INFO("Bottom thread started");
 
     ks1092_init(&ks1092_dev);
+    qmi8658a_init(&qmi8658a_dev);
 
     for(;;)
     {
