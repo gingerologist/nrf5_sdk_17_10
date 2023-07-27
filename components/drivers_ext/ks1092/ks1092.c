@@ -68,6 +68,7 @@ static ret_code_t ks1092_write(ks1092_dev_t * p_dev, uint8_t gain1, uint8_t gain
     }
 
     NRF_LOG_INFO("ks1092 regs: 0x%02x, 0x%02x", spi_rx[2], spi_rx[3]);
+    return NRF_SUCCESS;
 }
 
 void ks1092_init(ks1092_dev_t * p_dev)

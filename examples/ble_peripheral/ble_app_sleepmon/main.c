@@ -59,6 +59,9 @@
 
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_drv_saadc.h"
+#include "nrf_drv_ppi.h"
+#include "nrf_drv_timer.h"
 #include "nrf_twi_mngr.h"
 
 #include "app_error.h"
@@ -67,6 +70,7 @@
 #include "ble_srv_common.h"
 #include "ble_advdata.h"
 #include "ble_advertising.h"
+#include "ble_eeg.h"
 #include "ble_conn_params.h"
 #include "nrf_sdh.h"
 #include "nrf_sdh_soc.h"
@@ -134,6 +138,7 @@
 static TaskHandle_t m_logger_thread;                                            /**< Definition of Logger thread. */
 #endif
 
+BLE_EEG_DEF(m_eeg);
 NRF_BLE_GATT_DEF(m_gatt);                                                       /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);                                                         /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising);                                             /**< Advertising module instance. */
@@ -240,6 +245,276 @@ static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t a
 /* YOUR_JOB: Declare all services structure your application is using
  *  BLE_XYZ_DEF(m_xyz);
  */
+#define SAMPLE_TYPE_EEG         0x01
+#define SAMPLE_TYPE_IMU         0x02
+
+#define SAMPLES_IN_BUFFER       120
+
+static const nrf_drv_timer_t    m_adc_timer = NRF_DRV_TIMER_INSTANCE(1);
+static nrf_ppi_channel_t        m_ppi_channel;
+
+typedef __packed struct {
+    uint8_t type;
+    uint8_t version;            // 1
+    uint16_t length;            // fixed 244
+    uint32_t seq_num;
+    int16_t sample[SAMPLES_IN_BUFFER];
+} sample_packet_t;
+
+static sample_packet_t        m_eeg_packet[2] __attribute__((aligned(0x4))) = {
+    { .type = SAMPLE_TYPE_EEG,
+      .version = 1,
+      .length = 244             // TODO use offset of
+    },
+    { .type = SAMPLE_TYPE_EEG,
+      .version = 1,
+      .length = 244
+    },
+};
+
+static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
+{
+    if (p_event->type == NRF_DRV_SAADC_EVT_DONE)
+    {
+        ret_code_t err_code;
+
+        int16_t * p_buffer = p_event->data.done.p_buffer;
+        // if (p_buffer == &m_buffer_pool[0][2] || p_buffer == &m_buffer_pool[1][2])
+        if (p_buffer == m_eeg_packet[0].sample || p_buffer == m_eeg_packet[1].sample)
+        {
+          // do_something(p_buffer);
+          BottomEvent_t be = { .type = BE_SAADC };
+          be.p_data = p_buffer;
+          xQueueSendFromISR(m_beq, &be, NULL);
+        }
+        err_code = nrf_drv_saadc_buffer_convert(p_buffer, SAMPLES_IN_BUFFER);
+        APP_ERROR_CHECK(err_code);
+    }
+}
+
+static void adc_timer_handler(nrf_timer_event_t event_type, void * p_context)
+{
+}
+
+/*
+ * nrf_drv_saadc_buffer_convert explained
+ * https://devzone.nordicsemi.com/f/nordic-q-a/60230/what-is-the-purpose-of-nrf_drv_saadc_buffer_convert
+ *
+ * https://devzone.nordicsemi.com/f/nordic-q-a/46039/configuring-adc-sampling-rate-and-simultaneous-reading-from-multiple-channels
+ */
+void saadc_sampling_event_init(void)
+{
+    // const uint32_t period = 500;
+    ret_code_t err_code;
+
+    err_code = nrf_drv_ppi_init();
+    APP_ERROR_CHECK(err_code);
+
+    nrf_drv_timer_config_t timer_cfg = NRF_DRV_TIMER_DEFAULT_CONFIG;
+    timer_cfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
+    err_code = nrf_drv_timer_init(&m_adc_timer, &timer_cfg, adc_timer_handler);
+    APP_ERROR_CHECK(err_code);
+
+//    /* setup m_timer for compare event every 400ms */
+//    uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_adc_timer, period);
+//    nrf_drv_timer_extended_compare(&m_adc_timer,
+//                                   NRF_TIMER_CC_CHANNEL0,
+//                                   ticks,
+//                                   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
+//                                   false);
+
+    // nrf_drv_timer_enable(&m_adc_timer);
+    uint32_t timer_compare_event_addr = nrf_drv_timer_compare_event_address_get(&m_adc_timer,
+                                                                                NRF_TIMER_CC_CHANNEL0);
+    uint32_t saadc_sample_task_addr   = nrf_drv_saadc_sample_task_get();
+
+    /* setup ppi channel so that timer compare event is triggering sample task in SAADC */
+    err_code = nrf_drv_ppi_channel_alloc(&m_ppi_channel);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_assign(m_ppi_channel,
+                                          timer_compare_event_addr,
+                                          saadc_sample_task_addr);
+
+    APP_ERROR_CHECK(err_code);
+}
+
+void saadc_init(void)
+{
+    ret_code_t err_code;
+    nrf_saadc_channel_config_t channel_0_config =
+        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN1);
+
+    channel_0_config.gain = NRF_SAADC_GAIN1_4;
+
+    nrf_saadc_channel_config_t channel_1_config =
+        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
+
+    channel_1_config.gain = NRF_SAADC_GAIN1_4;
+
+    err_code = nrf_drv_saadc_init(NULL, saadc_callback);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_channel_init(0, &channel_0_config);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_channel_init(1, &channel_1_config);
+    APP_ERROR_CHECK(err_code);
+
+    // reserve first two sample for sequence number
+    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[0].sample, SAMPLES_IN_BUFFER);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[1].sample, SAMPLES_IN_BUFFER);
+    APP_ERROR_CHECK(err_code);
+}
+
+void saadc_sampling_event_enable(void)
+{
+    ret_code_t err_code;
+    uint32_t period;
+    uint8_t sps = m_eeg.sps_shadow;
+    if (sps == 0)
+    {
+      period = 8; // 125sps
+      NRF_LOG_INFO("Set sampling rate to 125sps (8ms)");
+    }
+    else if (sps == 1)
+    {
+      period = 4; // 250sps
+      NRF_LOG_INFO("Set sampling rate to 250sps (4ms)");
+    }
+    else
+    {
+      period = 8; // default 125sps
+      NRF_LOG_INFO("Set sampling rate to 125sps (8ms, fallback)");
+    }
+
+    /* setup m_timer for compare event every 400ms */
+    uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_adc_timer, period);
+    nrf_drv_timer_extended_compare(&m_adc_timer,
+                                   NRF_TIMER_CC_CHANNEL0,
+                                   ticks,
+                                   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
+                                   false);
+
+    nrf_drv_timer_enable(&m_adc_timer);
+    err_code = nrf_drv_ppi_channel_enable(m_ppi_channel);
+    APP_ERROR_CHECK(err_code);
+}
+
+void saadc_sampling_event_disable(void)
+{
+    ret_code_t err_code = nrf_drv_ppi_channel_disable(m_ppi_channel);
+    APP_ERROR_CHECK(err_code);
+
+    nrf_drv_timer_disable(&m_adc_timer);
+}
+
+static void on_eeg_evt(ble_eeg_t * p_eeg, ble_eeg_evt_t * p_evt)
+{
+}
+
+static void eeg_sps_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_sps)
+{
+    ret_code_t err_code;
+    ble_gatts_value_t gatts_value;
+
+    if (new_sps > 1) return;
+
+    gatts_value.len = sizeof(uint8_t);
+    gatts_value.offset = 0;
+    gatts_value.p_value = &new_sps;
+
+    err_code = sd_ble_gatts_value_set(conn_handle, p_eeg->sps_handles.value_handle, &gatts_value);
+    if (err_code != NRF_SUCCESS)
+    {
+      NRF_LOG_WARNING("failed to write sps value, error code: %d", err_code);
+    }
+    else
+    {
+      m_eeg.sps_shadow = new_sps;
+      NRF_LOG_INFO("sps set to %d", new_sps);
+    }
+}
+
+static void eeg_gain_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_gain)
+{
+    ret_code_t err_code;
+    ble_gatts_value_t gatts_value;
+
+    if (new_gain > 7) return;
+
+    gatts_value.len = sizeof(uint8_t);
+    gatts_value.offset = 0;
+    gatts_value.p_value = &new_gain;
+
+    err_code = sd_ble_gatts_value_set(conn_handle, p_eeg->gain_handles.value_handle, &gatts_value);
+    if (err_code != NRF_SUCCESS)
+    {
+      NRF_LOG_WARNING("failed to write gain value, error code: %d", err_code);
+    }
+    else
+    {
+      m_eeg.gain_shadow = new_gain;
+      NRF_LOG_INFO("gain set to %d", new_gain);
+    }
+}
+
+static void eeg_sample_notification_enabled()
+{
+    m_eeg.sample_notifying = true;
+    BottomEvent_t be = {
+      .type = BE_NOTIFICATION_ENABLED,
+    };
+    xQueueSendFromISR(m_beq, &be, NULL);
+}
+
+/*
+ * This function is idempotent for hiding sample_notifying member.
+ */
+static void eeg_sample_notification_disabled()
+{
+    if (m_eeg.sample_notifying == true) {
+        BottomEvent_t be = {
+        .type = BE_NOTIFICATION_DISABLED,
+        };
+
+        xQueueSendFromISR(m_beq, &be, NULL);
+        m_eeg.sample_notifying = false;
+    }
+}
+
+static bool eeg_sample_notifying()
+{
+    return m_eeg.sample_notifying;
+}
+
+static void eeg_init(void)
+{
+    ret_code_t      err_code;
+    ble_eeg_init_t  eeg_init_obj;
+
+    memset(&eeg_init_obj, 0, sizeof(eeg_init_obj));
+
+    eeg_init_obj.evt_handler          = on_eeg_evt;
+    eeg_init_obj.initial_sps          = 1;
+    eeg_init_obj.initial_gain         = 0;
+
+    eeg_init_obj.sps_write_handler = eeg_sps_write_handler;
+    eeg_init_obj.gain_write_handler = eeg_gain_write_handler;
+    eeg_init_obj.sample_notification_enabled = eeg_sample_notification_enabled;
+    eeg_init_obj.sample_notification_disabled = eeg_sample_notification_disabled;
+
+    //eeg_init_obj.
+    err_code = ble_eeg_init(&m_eeg, &eeg_init_obj);
+    APP_ERROR_CHECK(err_code);
+
+    saadc_init();
+    saadc_sampling_event_init();
+    // saadc_sampling_event_enable();
+}
+
 
 // YOUR_JOB: Use UUIDs for service(s) used in your application.
 static ble_uuid_t m_adv_uuids[] =                                               /**< Universally unique service identifiers. */
@@ -429,6 +704,7 @@ static void services_init(void)
        err_code = ble_yy_service_init(&yys_init, &yy_init);
        APP_ERROR_CHECK(err_code);
      */
+     eeg_init();
 }
 
 
