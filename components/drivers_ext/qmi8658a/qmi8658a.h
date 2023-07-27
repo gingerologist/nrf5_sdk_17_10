@@ -52,5 +52,8 @@ extern const char * const qmi8658a_reg_name[];
 extern const uint8_t qmi8658a_init_cfg[];
 
 void qmi8658a_init(qmi8658a_dev_t * p_dev);
+void qmi8658a_config(qmi8658a_dev_t * p_dev);
+void qmi8658a_disable(qmi8658a_dev_t * p_dev);
+void qmi8658a_read(qmi8658a_dev_t * p_dev, uint8_t addr, uint8_t * p_data, uint8_t length);
 
 #endif // __QMI8658A_H__

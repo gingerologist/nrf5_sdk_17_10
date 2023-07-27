@@ -4,7 +4,7 @@
 #include "nrfx_gpiote.h"
 #include "nrf_spi_mngr.h"
 
-#define KS1092_OFF              0xFF
+#define KS1092_CHAN_OFF             0xFF
 
 typedef struct ks1092_dev
 {

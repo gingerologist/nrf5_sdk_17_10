@@ -55,8 +55,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "SEGGER_RTT.h"
-
 #include "nordic_common.h"
 #include "nrf.h"
 #include "nrf_drv_saadc.h"
@@ -66,7 +64,7 @@
 
 #include "app_error.h"
 #include "ble.h"
-#include "ble_hci.h"
+// #include "ble_hci.h"
 #include "ble_srv_common.h"
 #include "ble_advdata.h"
 #include "ble_advertising.h"
@@ -261,7 +259,7 @@ typedef __packed struct {
     int16_t sample[SAMPLES_IN_BUFFER];
 } sample_packet_t;
 
-static sample_packet_t        m_eeg_packet[2] __attribute__((aligned(0x4))) = {
+static sample_packet_t          m_eeg_packet[2] __attribute__((aligned(0x4))) = {
     { .type = SAMPLE_TYPE_EEG,
       .version = 1,
       .length = 244             // TODO use offset of
@@ -270,6 +268,12 @@ static sample_packet_t        m_eeg_packet[2] __attribute__((aligned(0x4))) = {
       .version = 1,
       .length = 244
     },
+};
+
+static sample_packet_t          m_imu_packet = {
+    .type = SAMPLE_TYPE_IMU,
+    .version = 1,
+    .length = 244
 };
 
 static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
@@ -339,7 +343,7 @@ void saadc_sampling_event_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
-void saadc_init(void)
+static void saadc_init(void)
 {
     ret_code_t err_code;
     nrf_saadc_channel_config_t channel_0_config =
@@ -1170,9 +1174,88 @@ static void advertising_start(void * p_erase_bonds)
     }
 }
 
+void do_something(int16_t * p_buffer, uint32_t sn)
+{
+    ret_code_t err_code;
+    // uint32_t * p_cnt = NULL;
+    sample_packet_t * pkt = NULL;
+
+//    if (p_buffer == &m_buffer_pool[0][2])
+//    {
+//      p_cnt = (uint32_t *)m_buffer_pool[0];
+//    }
+//    else
+//    {
+//      p_cnt = (uint32_t *)m_buffer_pool[1];
+//    }
+
+    if (p_buffer == m_eeg_packet[0].sample)
+    {
+        pkt = &m_eeg_packet[0];
+    }
+    else
+    {
+        pkt = &m_eeg_packet[1];
+    }
+
+    // *p_cnt = sn;
+    pkt->seq_num = sn;
+
+    uint16_t len = sizeof(m_eeg_packet[0]);
+
+    int left = 0;
+    int right = 0;
+    for (int j = 0; j < SAMPLES_IN_BUFFER / 2; j++)
+    {
+      left += p_buffer[2 * j];
+      right += p_buffer[2 * j + 1];
+    }
+
+    left = left / (SAMPLES_IN_BUFFER / 2);
+    right = right / (SAMPLES_IN_BUFFER / 2);
+
+    // NRF_LOG_INFO("sn %d, l %d, r %d", sn, left, right);
+
+    ble_gatts_hvx_params_t hvx_params = {0};
+
+    hvx_params.handle = m_eeg.samples_handles.value_handle; // p_hrs->hrm_handles.value_handle;
+    hvx_params.type   = BLE_GATT_HVX_NOTIFICATION;
+    hvx_params.offset = 0;
+    hvx_params.p_len  = &len;                   // this is a bidirectional param
+    hvx_params.p_data = (uint8_t*)pkt;
+
+    // is this required?
+    if (m_eeg.conn_handle == BLE_CONN_HANDLE_INVALID)
+    {
+      NRF_LOG_ERROR("BLE_CONN_HANDLE_INVALID right before calling sd_ble_gatts_hvx");
+      return;
+    }
+
+    err_code = sd_ble_gatts_hvx(m_eeg.conn_handle, &hvx_params);
+
+    /*
+    * 0x3002 -> BLE_ERROR_INVALID_CONN_HANDLE; defined in ble_err.h
+    * 0x000c -> NRF_ERROR_DATA_SIZE;
+    */
+    if (err_code != NRF_SUCCESS)
+    {
+      NRF_LOG_ERROR("(eeg) sd_ble_gatts_hvx error, %d", err_code);
+    }
+
+    if (err_code == NRF_ERROR_DATA_SIZE)
+    {
+      NRF_LOG_INFO("len is %d", len);
+      NRF_LOG_INFO("*(hvx_params.p_len) is %d", *(hvx_params.p_len));
+    }
+}
+
 static void bottom_thread(void * arg)
 {
-    // ret_code_t err_code;
+    ret_code_t  err_code;
+    uint32_t    eeg_seq_num = 0;
+    uint32_t    imu_seq_num = 0;
+    int         imu_offset;
+    uint8_t     status0;
 
     NRF_LOG_INFO("Bottom thread started");
 
@@ -1181,7 +1264,98 @@ static void bottom_thread(void * arg)
 
     for(;;)
     {
-        vTaskDelay(portMAX_DELAY);
+        BottomEvent_t be;
+        xQueueReceive(m_beq, &be, portMAX_DELAY);
+
+        switch (be.type)
+        {
+        case BE_NONE:
+            break;
+        case BE_CONNECTED:
+            NRF_LOG_INFO("Connected.");
+            break;
+        case BE_DISCONNECTED:
+            NRF_LOG_INFO("Disconnected.");
+            break;
+        case BE_NOTIFICATION_ENABLED: {
+            err_code = ks1092_write(&ks1092_dev, m_eeg.gain_shadow, KS1092_CHAN_OFF);
+            APP_ERROR_CHECK(err_code);
+
+            saadc_sampling_event_enable();
+            nrfx_gpiote_in_event_enable(QMI8658A_INT2_PIN, true);
+            // qmi8658a_reset();
+            // vTaskDelay(1);
+            qmi8658a_config(&qmi8658a_dev);
+            // vTaskDelay(1);
+            // qmi8658a_enable();
+            eeg_seq_num = 0;
+            imu_seq_num = 0;
+            imu_offset = 0;
+            NRF_LOG_INFO("Start sampling (notification on)");
+        } break;
+        case BE_NOTIFICATION_DISABLED: {
+            qmi8658a_disable(&qmi8658a_dev);
+            nrfx_gpiote_in_event_enable(QMI8658A_INT2_PIN, false);
+            saadc_sampling_event_disable();
+            ks1092_write(&ks1092_dev, KS1092_CHAN_OFF, KS1092_CHAN_OFF);
+            NRF_LOG_INFO("Stop sampling (notification off)");
+        } break;
+        case BE_SAADC: {
+            if (eeg_sample_notifying())
+            {
+                do_something((int16_t*)be.p_data, eeg_seq_num++);
+            }
+        } break;
+        case BE_IMUINT2:
+            if (eeg_sample_notifying())
+            {
+                qmi8658a_read(&qmi8658a_dev, QMI8658A_STATUS0, &status0, 1);
+                if (status0 & 0x01)
+                {
+                    int16_t * p = (int16_t *)&m_imu_packet.sample[imu_offset];
+                    qmi8658a_read(&qmi8658a_dev, QMI8658A_AX_L, (uint8_t *)p, QMI8658A_BYTES_IN_DATA);
+                    imu_offset += QMI8658A_SAMPLES_IN_DATA;
+
+                    NRF_LOG_INFO(
+                        "ax %d, ay %d, az %d, gx %d, gy %d, gz %d",
+                        p[0], p[1], p[2], p[3], p[4], p[5]);
+
+                    if (imu_offset >= SAMPLES_IN_BUFFER)
+                    {
+                        imu_offset = 0;
+                        m_imu_packet.seq_num = imu_seq_num++;
+
+                        uint16_t len = sizeof(m_imu_packet);
+
+                        ble_gatts_hvx_params_t hvx_params = {0};
+
+                        hvx_params.handle = m_eeg.samples_handles.value_handle; // p_hrs->hrm_handles.value_handle;
+                        hvx_params.type   = BLE_GATT_HVX_NOTIFICATION;
+                        hvx_params.offset = 0;
+                        hvx_params.p_len  = &len;                   // this is a bidirectional param
+                        hvx_params.p_data = (uint8_t*)&m_imu_packet;
+
+                        ret_code_t err_code = sd_ble_gatts_hvx(m_eeg.conn_handle, &hvx_params);
+
+                        /*
+                        * 0x3002 -> BLE_ERROR_INVALID_CONN_HANDLE; defined in ble_err.h
+                        * 0x000c -> NRF_ERROR_DATA_SIZE;
+                        */
+                        if (err_code != NRF_SUCCESS)
+                        {
+                            NRF_LOG_ERROR("(imu) sd_ble_gatts_hvx error, %d", err_code);
+                        }
+
+                        if (err_code == NRF_ERROR_DATA_SIZE)
+                        {
+                            NRF_LOG_INFO("len is %d", len);
+                            NRF_LOG_INFO("*(hvx_params.p_len) is %d", *(hvx_params.p_len));
+                        }
+                    }
+                }
+            }
+            break;
+        }
     }
 }
 

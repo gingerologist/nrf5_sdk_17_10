@@ -103,7 +103,7 @@ static void qmi8658a_write(qmi8658a_dev_t * p_dev, uint8_t addr, const uint8_t *
     APP_ERROR_CHECK(err_code);
 }
 
-static void qmi8658a_read(qmi8658a_dev_t * p_dev, uint8_t addr, uint8_t * p_data, uint8_t length)
+void qmi8658a_read(qmi8658a_dev_t * p_dev, uint8_t addr, uint8_t * p_data, uint8_t length)
 {
     ret_code_t err_code;
 
@@ -136,7 +136,7 @@ static void qmi8658a_reset(qmi8658a_dev_t * p_dev)
     NRF_LOG_INFO("qmi8658a reset, CTRL1 0x%02x (expect 0x20)", val);
 }
 
-static void qmi8658a_config(qmi8658a_dev_t * p_dev)
+void qmi8658a_config(qmi8658a_dev_t * p_dev)
 {
     qmi8658a_write(p_dev, QMI8658A_REG_CTRL1, qmi8658a_init_cfg, sizeof(qmi8658a_init_cfg));
 
@@ -161,7 +161,7 @@ static void qmi8658a_enable(qmi8658a_dev_t * p_dev)
     NRF_LOG_INFO("qmi8658a enabled, CTRL1 0x%02x (expect 0x%02x)", val, QMI8658A_REG_CTRL1_ENABLE);
 }
 
-static void qmi8658a_disable(qmi8658a_dev_t * p_dev)
+void qmi8658a_disable(qmi8658a_dev_t * p_dev)
 {
 //    uint8_t val = QMI8658A_REG_CTRL1_DISABLE;       // disable sensor and int2
 //    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);

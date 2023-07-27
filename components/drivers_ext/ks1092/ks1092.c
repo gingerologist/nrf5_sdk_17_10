@@ -37,7 +37,7 @@ static nrf_spi_mngr_transfer_t const xfers[] =
     NRF_SPI_MNGR_TRANSFER(spi_tx, 4, spi_rx, 4)
 };
 
-static ret_code_t ks1092_write(ks1092_dev_t * p_dev, uint8_t gain1, uint8_t gain2)
+ret_code_t ks1092_write(ks1092_dev_t * p_dev, uint8_t gain1, uint8_t gain2)
 {
     ret_code_t err_code;
 
@@ -119,6 +119,6 @@ void ks1092_init(ks1092_dev_t * p_dev)
     nrfx_gpiote_out_set(p_dev->reset_pin);
     vTaskDelay(50);
 
-    err_code = ks1092_write(p_dev, KS1092_OFF, KS1092_OFF);
+    err_code = ks1092_write(p_dev, KS1092_CHAN_OFF, KS1092_CHAN_OFF);
     APP_ERROR_CHECK(err_code);
 }
