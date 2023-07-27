@@ -95,6 +95,9 @@
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
+#include "ks1092.h"
+#include "qmi8658a.h"
+
 // APP_TIMER_V2 APP_TIMER_V2_RTC1_ENABLED removed both C/C++ and asm.
 
 #define DEVICE_NAME                     "Nordic_Template"                       /**< Name of device. Will be included in the advertising data. */
@@ -145,8 +148,8 @@ static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;                        
  *  TWI0_USE_EASY_DMA	        0
  *  NRF_TWI_MNGR_ENABLED (optional, if twi_mngr is used)
  */
-#define TWI_INSTANCE_ID                 1
-#define MAX_PENDING_TRANSACTIONS        5
+#define TWI1_INSTANCE_ID                1
+#define TWI1_MAX_PENDING_TRANSACTIONS   4
 #define QMI8658A_SCL_PIN                21      // P0.21
 #define QMI8658A_SDA_PIN                19      // P0.19
 #define QMI8658A_INT1_PIN               18      // P0.18
@@ -154,14 +157,45 @@ static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;                        
 
 // use twi manager instead
 // static const nrf_drv_twi_t twi = NRF_DRV_TWI_INSTANCE(TWI_INSTANCE);
-NRF_TWI_MNGR_DEF(m_nrf_twi_mngr, MAX_PENDING_TRANSACTIONS, TWI_INSTANCE_ID);
+NRF_TWI_MNGR_DEF(m_nrf_twi_mngr, TWI1_MAX_PENDING_TRANSACTIONS, TWI1_INSTANCE_ID);
 static nrf_drv_twi_config_t const qmi8658a_twi_config = {
-  .scl                = QMI8658A_SCL_PIN,
-  .sda                = QMI8658A_SDA_PIN,
-  .frequency          = NRF_DRV_TWI_FREQ_400K,
-  .interrupt_priority = TWI_DEFAULT_CONFIG_IRQ_PRIORITY,
-  .clear_bus_init     = TWI_DEFAULT_CONFIG_CLR_BUS_INIT,
-  .hold_bus_uninit    = TWI_DEFAULT_CONFIG_HOLD_BUS_UNINIT,
+    .scl                = QMI8658A_SCL_PIN,
+    .sda                = QMI8658A_SDA_PIN,
+    .frequency          = NRF_DRV_TWI_FREQ_400K,
+    .interrupt_priority = TWI_DEFAULT_CONFIG_IRQ_PRIORITY,
+    .clear_bus_init     = TWI_DEFAULT_CONFIG_CLR_BUS_INIT,
+    .hold_bus_uninit    = TWI_DEFAULT_CONFIG_HOLD_BUS_UNINIT,
+};
+
+#define SPI0_INSTANCE_ID                0
+#define SPI0_MAX_PENDING_TRANSACTIONS   4
+
+#define KS1092_RST_PIN                  6       // P0.06
+#define KS1092_SS_PIN                   7       // P0.07
+#define KS1092_SCK_PIN                  8       // P0.08
+#define KS1092_MISO_PIN                 17      // P0.17 (PIN20)
+#define KS1092_MOSI_PIN                 18      // P0.18 (PIN21)
+
+NRF_SPI_MNGR_DEF(m_nrf_spi_mngr, SPI0_MAX_PENDING_TRANSACTIONS, SPI0_INSTANCE_ID);
+static nrf_drv_spi_config_t const ks1092_spi_config = {
+    .sck_pin            = KS1092_SCK_PIN,
+    .mosi_pin           = KS1092_MOSI_PIN,
+    .miso_pin           = KS1092_MISO_PIN,
+    .ss_pin             = KS1092_SS_PIN,
+    .irq_priority       = SPI_DEFAULT_CONFIG_IRQ_PRIORITY,
+    .orc                = 0xFF,
+    .frequency          = NRF_DRV_SPI_FREQ_1M,
+    .mode               = NRF_DRV_SPI_MODE_1, // !!! important
+    .bit_order          = NRF_DRV_SPI_BIT_ORDER_MSB_FIRST
+};
+
+static nrfx_gpiote_out_config_t const ks1092_reset_pin_out_config = NRFX_GPIOTE_CONFIG_OUT_SIMPLE(true);
+
+static ks1092_dev_t ks1092_dev = {
+    .p_spi_mngr         = &m_nrf_spi_mngr,
+    .p_spi_cfg          = &ks1092_spi_config,
+    .reset_pin          = KS1092_RST_PIN,
+    .p_reset_pin_cfg    = &ks1092_reset_pin_out_config
 };
 
 typedef enum BottomEventType
@@ -776,6 +810,10 @@ void log_pending_hook( void )
 }
 #endif
 
+/*
+ * https://devzone.nordicsemi.com/f/nordic-q-a/95398/nrf52840-correct-freertos-logging-using-nrf_log-module
+ */
+
 //#if NRF_LOG_ENABLED && NRF_LOG_DEFERRED
 //void log_pending_hook( void )
 //{
@@ -841,7 +879,12 @@ static void advertising_start(void * p_erase_bonds)
 
 static void bottom_thread(void * arg)
 {
+    // ret_code_t err_code;
+
     NRF_LOG_INFO("Bottom thread started");
+
+    ks1092_init(&ks1092_dev);
+
     for(;;)
     {
         vTaskDelay(portMAX_DELAY);
@@ -887,7 +930,7 @@ int main(void)
     // SEGGER_RTT_WriteString(0, "\n^^^ rtt ^^^\n");
     NRF_LOG_RAW_INFO("\n^^^ sleepmon start ^^^\n");
     nrf_sdh_freertos_init(advertising_start, &erase_bonds);
-    
+
     m_beq = xQueueCreate(BEVENTS_IN_QUEUE, sizeof(BottomEvent_t));
     if (m_beq == NULL)
     {
@@ -897,7 +940,7 @@ int main(void)
     if (pdPASS != xTaskCreate(bottom_thread, "BOTTOM", 256, NULL, 1, &m_bottom_thread))
     {
         APP_ERROR_HANDLER(NRF_ERROR_NO_MEM);
-    }    
+    }
 
     vTaskStartScheduler();
 

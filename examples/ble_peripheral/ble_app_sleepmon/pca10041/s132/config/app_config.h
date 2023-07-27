@@ -40,6 +40,7 @@
 #define SPI_ENABLED                                     1
 #define SPI0_ENABLED                                    1
 #define SPI0_USE_EASY_DMA                               0
+#define NRF_SPI_MNGR_ENABLED                            1
 
 #define NRFX_TWIM_ENABLED                               1
 #define NRFX_TWI_ENABLED                                1
