@@ -59,6 +59,8 @@
 
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_twi_mngr.h"
+
 #include "app_error.h"
 #include "ble.h"
 #include "ble_hci.h"
@@ -134,6 +136,55 @@ NRF_BLE_QWR_DEF(m_qwr);                                                         
 BLE_ADVERTISING_DEF(m_advertising);                                             /**< Advertising module instance. */
 
 static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;                        /**< Handle of the current connection. */
+
+/*
+ *  NRFX_TWIM_ENABLED         1
+ *  NRFX_TWI_ENABLED          1
+ *  TWI_ENABLED               1
+ *  TWI1_ENABLED              1
+ *  TWI0_USE_EASY_DMA	        0
+ *  NRF_TWI_MNGR_ENABLED (optional, if twi_mngr is used)
+ */
+#define TWI_INSTANCE_ID                 1
+#define MAX_PENDING_TRANSACTIONS        5
+#define QMI8658A_SCL_PIN                21      // P0.21
+#define QMI8658A_SDA_PIN                19      // P0.19
+#define QMI8658A_INT1_PIN               18      // P0.18
+#define QMI8658A_INT2_PIN               22      // P0.22
+
+// use twi manager instead
+// static const nrf_drv_twi_t twi = NRF_DRV_TWI_INSTANCE(TWI_INSTANCE);
+NRF_TWI_MNGR_DEF(m_nrf_twi_mngr, MAX_PENDING_TRANSACTIONS, TWI_INSTANCE_ID);
+static nrf_drv_twi_config_t const qmi8658a_twi_config = {
+  .scl                = QMI8658A_SCL_PIN,
+  .sda                = QMI8658A_SDA_PIN,
+  .frequency          = NRF_DRV_TWI_FREQ_400K,
+  .interrupt_priority = TWI_DEFAULT_CONFIG_IRQ_PRIORITY,
+  .clear_bus_init     = TWI_DEFAULT_CONFIG_CLR_BUS_INIT,
+  .hold_bus_uninit    = TWI_DEFAULT_CONFIG_HOLD_BUS_UNINIT,
+};
+
+typedef enum BottomEventType
+{
+  BE_NONE = 0,
+  BE_CONNECTED,
+  BE_DISCONNECTED,
+  BE_NOTIFICATION_ENABLED,
+  BE_NOTIFICATION_DISABLED,
+  BE_SAADC,
+  BE_IMUINT2,
+} BottomEventType_t;
+
+typedef struct BottomEvent
+{
+  BottomEventType_t type;
+  void * p_data;
+} BottomEvent_t;
+
+#define BEVENTS_IN_QUEUE      4
+
+static TaskHandle_t           m_bottom_thread;
+QueueHandle_t                 m_beq;
 
 /* YOUR_JOB: Declare all services structure your application is using
  *  BLE_XYZ_DEF(m_xyz);
@@ -788,7 +839,14 @@ static void advertising_start(void * p_erase_bonds)
     }
 }
 
-
+static void bottom_thread(void * arg)
+{
+    NRF_LOG_INFO("Bottom thread started");
+    for(;;)
+    {
+        vTaskDelay(portMAX_DELAY);
+    }
+}
 
 /**@brief Function for application main entry.
  */
@@ -829,6 +887,17 @@ int main(void)
     // SEGGER_RTT_WriteString(0, "\n^^^ rtt ^^^\n");
     NRF_LOG_RAW_INFO("\n^^^ sleepmon start ^^^\n");
     nrf_sdh_freertos_init(advertising_start, &erase_bonds);
+    
+    m_beq = xQueueCreate(BEVENTS_IN_QUEUE, sizeof(BottomEvent_t));
+    if (m_beq == NULL)
+    {
+      APP_ERROR_CHECK(NRF_ERROR_NO_MEM);
+    }
+
+    if (pdPASS != xTaskCreate(bottom_thread, "BOTTOM", 256, NULL, 1, &m_bottom_thread))
+    {
+        APP_ERROR_HANDLER(NRF_ERROR_NO_MEM);
+    }    
 
     vTaskStartScheduler();
 
