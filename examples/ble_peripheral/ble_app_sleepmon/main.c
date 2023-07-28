@@ -62,9 +62,7 @@
 #include "nrf_drv_timer.h"
 #include "nrf_twi_mngr.h"
 
-#include "app_error.h"
 #include "ble.h"
-// #include "ble_hci.h"
 #include "ble_srv_common.h"
 #include "ble_advdata.h"
 #include "ble_advertising.h"
@@ -73,30 +71,25 @@
 #include "nrf_sdh.h"
 #include "nrf_sdh_soc.h"
 #include "nrf_sdh_ble.h"
-
 #include "nrf_sdh_freertos.h"
-
-#include "app_timer.h"
 #include "fds.h"
 #include "peer_manager.h"
 #include "peer_manager_handler.h"
 #include "bsp_btn_ble.h"
-
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
 #include "semphr.h"
-
-// #include "sensorsim.h"
 #include "ble_conn_state.h"
 #include "nrf_ble_gatt.h"
 #include "nrf_ble_qwr.h"
 #include "nrf_pwr_mgmt.h"
-
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
+#include "app_timer.h"
+#include "app_error.h"
 #include "ks1092.h"
 #include "qmi8658a.h"
 
@@ -112,23 +105,15 @@
 #define APP_BLE_OBSERVER_PRIO           3                                       /**< Application's BLE observer priority. You shouldn't need to modify this value. */
 #define APP_BLE_CONN_CFG_TAG            1                                       /**< A tag identifying the SoftDevice BLE configuration. */
 
-#define MIN_CONN_INTERVAL               MSEC_TO_UNITS(100, UNIT_1_25_MS)        /**< Minimum acceptable connection interval (0.1 seconds). */
-#define MAX_CONN_INTERVAL               MSEC_TO_UNITS(200, UNIT_1_25_MS)        /**< Maximum acceptable connection interval (0.2 second). */
+                                        // defaults 100, 200
+#define MIN_CONN_INTERVAL               MSEC_TO_UNITS(15, UNIT_1_25_MS)         /**< Minimum acceptable connection interval (0.1 seconds). */
+#define MAX_CONN_INTERVAL               MSEC_TO_UNITS(40, UNIT_1_25_MS)         /**< Maximum acceptable connection interval (0.2 second). */
 #define SLAVE_LATENCY                   0                                       /**< Slave latency. */
 #define CONN_SUP_TIMEOUT                MSEC_TO_UNITS(4000, UNIT_10_MS)         /**< Connection supervisory timeout (4 seconds). */
 
 #define FIRST_CONN_PARAMS_UPDATE_DELAY  APP_TIMER_TICKS(5000)                   /**< Time from initiating event (connect or start of notification) to first time sd_ble_gap_conn_param_update is called (5 seconds). */
 #define NEXT_CONN_PARAMS_UPDATE_DELAY   APP_TIMER_TICKS(30000)                  /**< Time between each call to sd_ble_gap_conn_param_update after the first call (30 seconds). */
 #define MAX_CONN_PARAMS_UPDATE_COUNT    3                                       /**< Number of attempts before giving up the connection parameter negotiation. */
-
-//#define SEC_PARAM_BOND                  1                                       /**< Perform bonding. */
-//#define SEC_PARAM_MITM                  0                                       /**< Man In The Middle protection not required. */
-//#define SEC_PARAM_LESC                  0                                       /**< LE Secure Connections not enabled. */
-//#define SEC_PARAM_KEYPRESS              0                                       /**< Keypress notifications not enabled. */
-//#define SEC_PARAM_IO_CAPABILITIES       BLE_GAP_IO_CAPS_NONE                    /**< No I/O capabilities. */
-//#define SEC_PARAM_OOB                   0                                       /**< Out Of Band data not available. */
-//#define SEC_PARAM_MIN_KEY_SIZE          7                                       /**< Minimum encryption key size. */
-//#define SEC_PARAM_MAX_KEY_SIZE          16                                      /**< Maximum encryption key size. */
 
 #define DEAD_BEEF                       0xDEADBEEF                              /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
@@ -229,10 +214,10 @@ typedef struct BottomEvent
   void * p_data;
 } BottomEvent_t;
 
-#define BEVENTS_IN_QUEUE      4
+#define BEVENTS_IN_QUEUE        4
 
-static TaskHandle_t           m_bottom_thread;
-QueueHandle_t                 m_beq;
+static TaskHandle_t             m_bottom_thread;
+QueueHandle_t                   m_beq;
 
 static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
 {
@@ -276,6 +261,7 @@ static sample_packet_t          m_imu_packet = {
     .length = 244
 };
 
+
 static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 {
     if (p_event->type == NRF_DRV_SAADC_EVT_DONE)
@@ -283,10 +269,8 @@ static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
         ret_code_t err_code;
 
         int16_t * p_buffer = p_event->data.done.p_buffer;
-        // if (p_buffer == &m_buffer_pool[0][2] || p_buffer == &m_buffer_pool[1][2])
         if (p_buffer == m_eeg_packet[0].sample || p_buffer == m_eeg_packet[1].sample)
         {
-          // do_something(p_buffer);
           BottomEvent_t be = { .type = BE_SAADC };
           be.p_data = p_buffer;
           xQueueSendFromISR(m_beq, &be, NULL);
@@ -301,14 +285,14 @@ static void adc_timer_handler(nrf_timer_event_t event_type, void * p_context)
 }
 
 /*
+ * init adc timer and ppi, allocate and assign ppi channel
+ *
  * nrf_drv_saadc_buffer_convert explained
  * https://devzone.nordicsemi.com/f/nordic-q-a/60230/what-is-the-purpose-of-nrf_drv_saadc_buffer_convert
- *
  * https://devzone.nordicsemi.com/f/nordic-q-a/46039/configuring-adc-sampling-rate-and-simultaneous-reading-from-multiple-channels
  */
 void saadc_sampling_event_init(void)
 {
-    // const uint32_t period = 500;
     ret_code_t err_code;
 
     err_code = nrf_drv_ppi_init();
@@ -319,15 +303,6 @@ void saadc_sampling_event_init(void)
     err_code = nrf_drv_timer_init(&m_adc_timer, &timer_cfg, adc_timer_handler);
     APP_ERROR_CHECK(err_code);
 
-//    /* setup m_timer for compare event every 400ms */
-//    uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_adc_timer, period);
-//    nrf_drv_timer_extended_compare(&m_adc_timer,
-//                                   NRF_TIMER_CC_CHANNEL0,
-//                                   ticks,
-//                                   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
-//                                   false);
-
-    // nrf_drv_timer_enable(&m_adc_timer);
     uint32_t timer_compare_event_addr = nrf_drv_timer_compare_event_address_get(&m_adc_timer,
                                                                                 NRF_TIMER_CC_CHANNEL0);
     uint32_t saadc_sample_task_addr   = nrf_drv_saadc_sample_task_get();
@@ -372,6 +347,10 @@ static void saadc_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
+
+/*
+ * enable adc timer (according to m_eeg.sps_shadow) and ppi channel
+ */
 void saadc_sampling_event_enable(void)
 {
     ret_code_t err_code;
@@ -393,7 +372,6 @@ void saadc_sampling_event_enable(void)
       NRF_LOG_INFO("Set sampling rate to 125sps (8ms, fallback)");
     }
 
-    /* setup m_timer for compare event every 400ms */
     uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_adc_timer, period);
     nrf_drv_timer_extended_compare(&m_adc_timer,
                                    NRF_TIMER_CC_CHANNEL0,
@@ -468,7 +446,7 @@ static void eeg_sample_notification_enabled()
 {
     m_eeg.sample_notifying = true;
     BottomEvent_t be = {
-      .type = BE_NOTIFICATION_ENABLED,
+        .type = BE_NOTIFICATION_ENABLED,
     };
     xQueueSendFromISR(m_beq, &be, NULL);
 }
@@ -480,7 +458,7 @@ static void eeg_sample_notification_disabled()
 {
     if (m_eeg.sample_notifying == true) {
         BottomEvent_t be = {
-        .type = BE_NOTIFICATION_DISABLED,
+            .type = BE_NOTIFICATION_DISABLED,
         };
 
         xQueueSendFromISR(m_beq, &be, NULL);
@@ -842,14 +820,19 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
 static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 {
     ret_code_t err_code = NRF_SUCCESS;
+    BottomEvent_t be = {0};
 
     switch (p_ble_evt->header.evt_id)
     {
-        case BLE_GAP_EVT_DISCONNECTED:
+        case BLE_GAP_EVT_DISCONNECTED: {
             NRF_LOG_INFO("Disconnected.");
             // LED indication will be changed when advertising starts.
+            eeg_sample_notification_disabled();
+            m_eeg.conn_handle = BLE_CONN_HANDLE_INVALID;
+            be.type = BE_DISCONNECTED;
+            xQueueSendFromISR(m_beq, &be, NULL);
             break;
-
+        }
         case BLE_GAP_EVT_CONNECTED:
             NRF_LOG_INFO("Connected.");
             err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
@@ -857,6 +840,10 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
             err_code = nrf_ble_qwr_conn_handle_assign(&m_qwr, m_conn_handle);
             APP_ERROR_CHECK(err_code);
+
+            m_eeg.conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
+            be.type = BE_CONNECTED;
+            xQueueSendFromISR(m_beq, &be, NULL);
             break;
 
         case BLE_GAP_EVT_PHY_UPDATE_REQUEST:
@@ -885,6 +872,9 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
             err_code = sd_ble_gap_disconnect(p_ble_evt->evt.gatts_evt.conn_handle,
                                              BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
             APP_ERROR_CHECK(err_code);
+            break;
+
+        case BLE_GATTS_EVT_HVN_TX_COMPLETE:
             break;
 
         default:
@@ -924,30 +914,10 @@ static void ble_stack_init(void)
  */
 static void peer_manager_init(void)
 {
-//    ble_gap_sec_params_t sec_param;
     ret_code_t           err_code;
 
     err_code = pm_init();
     APP_ERROR_CHECK(err_code);
-
-//    memset(&sec_param, 0, sizeof(ble_gap_sec_params_t));
-
-//    // Security parameters to be used for all security procedures.
-//    sec_param.bond           = SEC_PARAM_BOND;
-//    sec_param.mitm           = SEC_PARAM_MITM;
-//    sec_param.lesc           = SEC_PARAM_LESC;
-//    sec_param.keypress       = SEC_PARAM_KEYPRESS;
-//    sec_param.io_caps        = SEC_PARAM_IO_CAPABILITIES;
-//    sec_param.oob            = SEC_PARAM_OOB;
-//    sec_param.min_key_size   = SEC_PARAM_MIN_KEY_SIZE;
-//    sec_param.max_key_size   = SEC_PARAM_MAX_KEY_SIZE;
-//    sec_param.kdist_own.enc  = 1;
-//    sec_param.kdist_own.id   = 1;
-//    sec_param.kdist_peer.enc = 1;
-//    sec_param.kdist_peer.id  = 1;
-
-//    err_code = pm_sec_params_set(&sec_param);
-//    APP_ERROR_CHECK(err_code);
 
     err_code = pm_register(pm_evt_handler);
     APP_ERROR_CHECK(err_code);
@@ -1317,10 +1287,12 @@ static void bottom_thread(void * arg)
                         /*
                         * 0x3002 -> BLE_ERROR_INVALID_CONN_HANDLE; defined in ble_err.h
                         * 0x000c -> NRF_ERROR_DATA_SIZE;
+                        * 0x0013 -> NRF_ERROR_RESOURCES
                         */
                         if (err_code != NRF_SUCCESS)
                         {
-                            NRF_LOG_ERROR("(imu) sd_ble_gatts_hvx error, %d", err_code);
+                            // TODO output INVALID_CONN_HANDLE
+                            NRF_LOG_ERROR("(imu) sd_ble_gatts_hvx error, 0x%04x", err_code);
                         }
 
                         if (err_code == NRF_ERROR_DATA_SIZE)
