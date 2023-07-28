@@ -42,14 +42,14 @@ const char * const qmi8658a_reg_name[] = {
 
 const uint8_t qmi8658a_init_cfg[] =
 {
-    QMI8658A_REG_CTRL1_ENABLE,     // 0x02 big endian (i2c is always BE),
-    0x07,   // 0x03 accel scale 2g, odr 58.75Hz
-    0x07,   // 0x04 gyro 16dps, odr 58.75Hz
-    0x00,   // 0x05 not used
-    0x00,   // 0x06 no low pass filter
-    0x00,   // 0x07 no motion on demand
-    0x83,   // 0x08 syncSmpl mode, attitude disabled, gyro enabled and full, accel enabled
-    0x00,   // 0x09 no engine enabled, int pin default
+    QMI8658A_REG_CTRL1_ENABLE,      // 0x02 big endian (i2c is always BE),
+    0x37,                           // 0x03 accel scale +/-16g, odr 58.75Hz
+    0x77,                           // 0x04 gyro scale +/-2048dps, odr 58.75Hz
+    0x00,                           // 0x05 not used
+    0x00,                           // 0x06 no low pass filter
+    0x00,                           // 0x07 no motion on demand
+    0x83,                           // 0x08 syncSmpl mode, attitude disabled, gyro enabled and full, accel enabled
+    0x00,                           // 0x09 no engine enabled, int pin default
 };
 
 
