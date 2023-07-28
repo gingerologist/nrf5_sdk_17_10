@@ -365,7 +365,6 @@ static void saadc_init(void)
     err_code = nrf_drv_saadc_channel_init(1, &channel_1_config);
     APP_ERROR_CHECK(err_code);
 
-    // reserve first two sample for sequence number
     err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[0].sample, SAMPLES_IN_BUFFER);
     APP_ERROR_CHECK(err_code);
 
@@ -1091,6 +1090,10 @@ static void logger_thread(void * arg)
 }
 #endif //NRF_LOG_ENABLED
 
+/*
+ * https://devzone.nordicsemi.com/f/nordic-q-a/95398/nrf52840-correct-freertos-logging-using-nrf_log-module
+ */
+
 #if NRF_LOG_ENABLED && NRF_LOG_DEFERRED
 void log_pending_hook( void )
 {
@@ -1106,32 +1109,6 @@ void log_pending_hook( void )
     }
 }
 #endif
-
-/*
- * https://devzone.nordicsemi.com/f/nordic-q-a/95398/nrf52840-correct-freertos-logging-using-nrf_log-module
- */
-
-//#if NRF_LOG_ENABLED && NRF_LOG_DEFERRED
-//void log_pending_hook( void )
-//{
-//    BaseType_t result = pdFAIL;
-
-//    if ( __get_IPSR() != 0 )
-//    {
-//        BaseType_t higherPriorityTaskWoken = pdFALSE;
-//        result = xTaskNotifyFromISR( m_logger_thread, 0, eSetValueWithoutOverwrite, &higherPriorityTaskWoken );
-
-//        if ( pdFAIL != result )
-//        {
-//            portYIELD_FROM_ISR( higherPriorityTaskWoken );
-//        }
-//    }
-//    else
-//    {
-//        UNUSED_RETURN_VALUE(xTaskNotify( m_logger_thread, 0, eSetValueWithoutOverwrite ));
-//    }
-//}
-//#endif
 
 /**@brief Function for initializing power management.
  */
