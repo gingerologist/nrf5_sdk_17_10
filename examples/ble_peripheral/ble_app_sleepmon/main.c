@@ -1277,7 +1277,7 @@ static void bottom_thread(void * arg)
                         /*
                         * 0x3002 -> BLE_ERROR_INVALID_CONN_HANDLE; defined in ble_err.h
                         * 0x000c -> NRF_ERROR_DATA_SIZE;
-                        * 0x0013 -> NRF_ERROR_RESOURCES
+                        * 0x0013 -> NRF_ERROR_RESOURCES, probably wrong timing
                         */
                         if (err_code != NRF_SUCCESS)
                         {
