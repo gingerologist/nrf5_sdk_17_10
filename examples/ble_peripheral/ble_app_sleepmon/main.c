@@ -93,6 +93,8 @@
 #include "ks1092.h"
 #include "qmi8658a.h"
 
+// #define sd_ble_gatts_hvx(x,y)           NRF_SUCCESS
+
 // APP_TIMER_V2 APP_TIMER_V2_RTC1_ENABLED removed both C/C++ and asm.
 
 #define DEVICE_NAME                     "Nordic_Template"                       /**< Name of device. Will be included in the advertising data. */
@@ -291,9 +293,33 @@ static void adc_timer_handler(nrf_timer_event_t event_type, void * p_context)
  * https://devzone.nordicsemi.com/f/nordic-q-a/60230/what-is-the-purpose-of-nrf_drv_saadc_buffer_convert
  * https://devzone.nordicsemi.com/f/nordic-q-a/46039/configuring-adc-sampling-rate-and-simultaneous-reading-from-multiple-channels
  */
-void saadc_sampling_event_init(void)
+static void saadc_init(void)
 {
     ret_code_t err_code;
+    nrf_saadc_channel_config_t channel_0_config =
+        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN1);
+
+    channel_0_config.gain = NRF_SAADC_GAIN1_4;
+
+//    nrf_saadc_channel_config_t channel_1_config =
+//        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
+
+//    channel_1_config.gain = NRF_SAADC_GAIN1_4;
+
+    err_code = nrf_drv_saadc_init(NULL, saadc_callback);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_channel_init(0, &channel_0_config);
+    APP_ERROR_CHECK(err_code);
+
+//    err_code = nrf_drv_saadc_channel_init(1, &channel_1_config);
+//    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[0].sample, SAMPLES_IN_BUFFER);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[1].sample, SAMPLES_IN_BUFFER);
+    APP_ERROR_CHECK(err_code);
 
     err_code = nrf_drv_ppi_init();
     APP_ERROR_CHECK(err_code);
@@ -317,36 +343,6 @@ void saadc_sampling_event_init(void)
 
     APP_ERROR_CHECK(err_code);
 }
-
-static void saadc_init(void)
-{
-    ret_code_t err_code;
-    nrf_saadc_channel_config_t channel_0_config =
-        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN1);
-
-    channel_0_config.gain = NRF_SAADC_GAIN1_4;
-
-    nrf_saadc_channel_config_t channel_1_config =
-        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
-
-    channel_1_config.gain = NRF_SAADC_GAIN1_4;
-
-    err_code = nrf_drv_saadc_init(NULL, saadc_callback);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = nrf_drv_saadc_channel_init(0, &channel_0_config);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = nrf_drv_saadc_channel_init(1, &channel_1_config);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[0].sample, SAMPLES_IN_BUFFER);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[1].sample, SAMPLES_IN_BUFFER);
-    APP_ERROR_CHECK(err_code);
-}
-
 
 /*
  * enable adc timer (according to m_eeg.sps_shadow) and ppi channel
@@ -492,7 +488,7 @@ static void eeg_init(void)
     APP_ERROR_CHECK(err_code);
 
     saadc_init();
-    saadc_sampling_event_init();
+    // saadc_sampling_event_init();
     // saadc_sampling_event_enable();
 }
 
@@ -820,12 +816,12 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
 static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 {
     ret_code_t err_code = NRF_SUCCESS;
-    BottomEvent_t be = {0};
+    BottomEvent_t be = { .type = BE_NONE, .p_data = NULL };
 
     switch (p_ble_evt->header.evt_id)
     {
         case BLE_GAP_EVT_DISCONNECTED: {
-            NRF_LOG_INFO("Disconnected.");
+            NRF_LOG_INFO("GAP EVT Disconnected.");
             // LED indication will be changed when advertising starts.
             eeg_sample_notification_disabled();
             m_eeg.conn_handle = BLE_CONN_HANDLE_INVALID;
@@ -834,7 +830,7 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
             break;
         }
         case BLE_GAP_EVT_CONNECTED:
-            NRF_LOG_INFO("Connected.");
+            NRF_LOG_INFO("GAP EVT Connected.");
             err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
             APP_ERROR_CHECK(err_code);
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
@@ -848,7 +844,7 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 
         case BLE_GAP_EVT_PHY_UPDATE_REQUEST:
         {
-            NRF_LOG_DEBUG("PHY update request.");
+            NRF_LOG_DEBUG("GAP EVT PHY update request.");
             ble_gap_phys_t const phys =
             {
                 .rx_phys = BLE_GAP_PHY_AUTO,
@@ -1124,17 +1120,7 @@ static void advertising_start(void * p_erase_bonds)
 void do_something(int16_t * p_buffer, uint32_t sn)
 {
     ret_code_t err_code;
-    // uint32_t * p_cnt = NULL;
     sample_packet_t * pkt = NULL;
-
-//    if (p_buffer == &m_buffer_pool[0][2])
-//    {
-//      p_cnt = (uint32_t *)m_buffer_pool[0];
-//    }
-//    else
-//    {
-//      p_cnt = (uint32_t *)m_buffer_pool[1];
-//    }
 
     if (p_buffer == m_eeg_packet[0].sample)
     {
@@ -1145,7 +1131,6 @@ void do_something(int16_t * p_buffer, uint32_t sn)
         pkt = &m_eeg_packet[1];
     }
 
-    // *p_cnt = sn;
     pkt->seq_num = sn;
 
     uint16_t len = sizeof(m_eeg_packet[0]);
@@ -1193,6 +1178,11 @@ void do_something(int16_t * p_buffer, uint32_t sn)
     {
       NRF_LOG_INFO("len is %d", len);
       NRF_LOG_INFO("*(hvx_params.p_len) is %d", *(hvx_params.p_len));
+    }
+
+    if (sn % 1000 == 0)
+    {
+        NRF_LOG_INFO("(eeg) packet %d sent", sn);
     }
 }
 
@@ -1263,14 +1253,14 @@ static void bottom_thread(void * arg)
                     qmi8658a_read(&qmi8658a_dev, QMI8658A_AX_L, (uint8_t *)p, QMI8658A_BYTES_IN_DATA);
                     imu_offset += QMI8658A_SAMPLES_IN_DATA;
 
-                    NRF_LOG_INFO(
-                        "ax %d, ay %d, az %d, gx %d, gy %d, gz %d",
-                        p[0], p[1], p[2], p[3], p[4], p[5]);
+//                    NRF_LOG_INFO(
+//                        "ax %d, ay %d, az %d, gx %d, gy %d, gz %d",
+//                        p[0], p[1], p[2], p[3], p[4], p[5]);
 
                     if (imu_offset >= SAMPLES_IN_BUFFER)
                     {
                         imu_offset = 0;
-                        m_imu_packet.seq_num = imu_seq_num++;
+                        m_imu_packet.seq_num = imu_seq_num;
 
                         uint16_t len = sizeof(m_imu_packet);
 
@@ -1300,6 +1290,13 @@ static void bottom_thread(void * arg)
                             NRF_LOG_INFO("len is %d", len);
                             NRF_LOG_INFO("*(hvx_params.p_len) is %d", *(hvx_params.p_len));
                         }
+
+                        if (imu_seq_num % 1000 == 0)
+                        {
+                            NRF_LOG_INFO("(imu) packet %d sent", imu_seq_num);
+                        }
+
+                        imu_seq_num++;
                     }
                 }
             }
