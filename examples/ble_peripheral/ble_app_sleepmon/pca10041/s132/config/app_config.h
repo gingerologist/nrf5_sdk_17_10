@@ -23,13 +23,22 @@
 #define BLE_EEG_ENABLED                                 1
 #define BLE_EEG_BLE_OBSERVER_PRIO                       2
 
-#define NRFX_TIMER_ENABLED 1
-#define NRFX_TIMER1_ENABLED 1
-#define TIMER_ENABLED 1
-#define TIMER1_ENABLED 1
+/*
+ * Timer 1 is used for saadc sampling
+ * Timer 2 is used for libuarte
+ */
+#define NRFX_TIMER_ENABLED                              1
+#define NRFX_TIMER1_ENABLED                             1
+#define NRFX_TIMER2_ENABLED                             1
+#define NRFX_TIMER3_ENABLED                             1
+#define TIMER_ENABLED                                   1
+#define TIMER1_ENABLED                                  1
+#define TIMER2_ENABLED                                  1
+#define TIMER3_ENABLED                                  1
+
 
 #define NRFX_PPI_ENABLED                                1
-#define PPI_ENABLED 1
+#define PPI_ENABLED                                     1
 
 #define NRFX_SAADC_ENABLED                              1
 #define NRFX_SAADC_CONFIG_RESOLUTION                    3 // 14 bit
@@ -62,5 +71,12 @@
 #define NRF_SDH_BLE_SERVICE_CHANGED                     0   // no idea
 
 #define NRF_SDH_DISPATCH_MODEL                          2   // 0 interrupt, 2 polling (freertos must use 2)
+
+/* these are not in template project, but in libuarte example */
+#define NRF_LIBUARTE_ASYNC_WITH_APP_TIMER               0
+#define NRF_LIBUARTE_DRV_HWFC_ENABLED                   0
+#define NRF_LIBUARTE_DRV_UARTE0                         1
+#define NRF_LIBUARTE_DRV_UARTE1                         0
+
 
 #endif

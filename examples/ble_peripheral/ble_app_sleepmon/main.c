@@ -57,10 +57,12 @@
 
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_power.h"
 #include "nrf_drv_saadc.h"
 #include "nrf_drv_ppi.h"
 #include "nrf_drv_timer.h"
 #include "nrf_twi_mngr.h"
+#include "nrf_libuarte_async.h"
 
 #include "ble.h"
 #include "ble_srv_common.h"
@@ -96,6 +98,9 @@
 // #define sd_ble_gatts_hvx(x,y)           NRF_SUCCESS
 
 // APP_TIMER_V2 APP_TIMER_V2_RTC1_ENABLED removed both C/C++ and asm.
+
+#define BTN_ID_WAKEUP                   0
+#define BTN_ID_SLEEP                    0
 
 #define DEVICE_NAME                     "Nordic_Template"                       /**< Name of device. Will be included in the advertising data. */
 #define MANUFACTURER_NAME               "NordicSemiconductor"                   /**< Manufacturer. Will be passed to Device Information Service. */
@@ -198,6 +203,79 @@ static ks1092_dev_t ks1092_dev = {
     .reset_pin          = KS1092_RST_PIN,
     .p_reset_pin_cfg    = &ks1092_reset_pin_out_config
 };
+
+NRF_LIBUARTE_ASYNC_DEFINE(
+    libuarte,
+    0,    // _uarte_idx, UARTE instance used.
+    2,    // _timer0_idx, TIMER instance used by libuarte for bytes counting.
+
+    // _rtc1_idx, RTC instance used for timeout.
+    // If set to NRF_LIBUARTE_PERIPHERAL_NOT_USED then TIMER instance is used
+    // or app_timer instance if _timer1_idx is also set to NRF_LIBUARTE_PERIPHERAL_NOT_USED.
+    NRF_LIBUARTE_PERIPHERAL_NOT_USED,
+
+    // _timer1_idx, TIMER instance used for timeout.
+    // If set to NRF_LIBUARTE_PERIPHERAL_NOT_USED then RTC instance is used
+    // or app_timer instance if _rtc1_idx is also set to NRF_LIBUARTE_PERIPHERAL_NOT_USED.
+    3,
+    255,
+    3);
+
+static volatile bool m_loopback_phase;
+typedef struct {
+    uint8_t * p_data;
+    uint32_t length;
+} buffer_t;
+
+NRF_QUEUE_DEF(buffer_t, m_buf_queue, 10, NRF_QUEUE_MODE_NO_OVERFLOW);
+
+void uart_event_handler(void * context, nrf_libuarte_async_evt_t * p_evt)
+{
+    nrf_libuarte_async_t * p_libuarte = (nrf_libuarte_async_t *)context;
+    ret_code_t ret;
+
+    switch (p_evt->type)
+    {
+        case NRF_LIBUARTE_ASYNC_EVT_ERROR:
+            // bsp_board_led_invert(0);
+            break;
+        case NRF_LIBUARTE_ASYNC_EVT_RX_DATA:
+            ret = nrf_libuarte_async_tx(p_libuarte,p_evt->data.rxtx.p_data, p_evt->data.rxtx.length);
+            if (ret == NRF_ERROR_BUSY)
+            {
+                buffer_t buf = {
+                    .p_data = p_evt->data.rxtx.p_data,
+                    .length = p_evt->data.rxtx.length,
+                };
+
+                ret = nrf_queue_push(&m_buf_queue, &buf);
+                APP_ERROR_CHECK(ret);
+            }
+            else
+            {
+                APP_ERROR_CHECK(ret);
+            }
+            bsp_board_led_invert(1);
+            m_loopback_phase = true;
+            break;
+        case NRF_LIBUARTE_ASYNC_EVT_TX_DONE:
+            if (m_loopback_phase)
+            {
+                nrf_libuarte_async_rx_free(p_libuarte, p_evt->data.rxtx.p_data, p_evt->data.rxtx.length);
+                if (!nrf_queue_is_empty(&m_buf_queue))
+                {
+                    buffer_t buf;
+                    ret = nrf_queue_pop(&m_buf_queue, &buf);
+                    APP_ERROR_CHECK(ret);
+                    UNUSED_RETURN_VALUE(nrf_libuarte_async_tx(p_libuarte, buf.p_data, buf.length));
+                }
+            }
+            bsp_board_led_invert(2);
+            break;
+        default:
+            break;
+    }
+}
 
 typedef enum BottomEventType
 {
@@ -499,9 +577,36 @@ static ble_uuid_t m_adv_uuids[] =                                               
     {BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE}
 };
 
+/**@brief Clear bond information from persistent storage.
+ */
+static void delete_bonds(void)
+{
+    ret_code_t err_code;
 
-static void advertising_start(void * p_erase_bonds);
+    NRF_LOG_INFO("Erase bonds!");
 
+    err_code = pm_peers_delete();
+    APP_ERROR_CHECK(err_code);
+}
+
+// static void advertising_start(void * p_erase_bonds);
+/**@brief Function for starting advertising.
+ */
+static void advertising_start(void * p_erase_bonds)
+{
+    bool erase_bonds = *(bool*)p_erase_bonds;
+
+    if (erase_bonds)
+    {
+        delete_bonds();
+        // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
+    }
+    else
+    {
+        ret_code_t err_code = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
+        APP_ERROR_CHECK(err_code);
+    }
+}
 
 /**@brief Callback function for asserts in the SoftDevice.
  *
@@ -919,20 +1024,6 @@ static void peer_manager_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
-
-/**@brief Clear bond information from persistent storage.
- */
-static void delete_bonds(void)
-{
-    ret_code_t err_code;
-
-    NRF_LOG_INFO("Erase bonds!");
-
-    err_code = pm_peers_delete();
-    APP_ERROR_CHECK(err_code);
-}
-
-
 /**@brief Function for handling events from the BSP module.
  *
  * @param[in]   event   Event generated when button is pressed.
@@ -1017,6 +1108,11 @@ static void buttons_leds_init(bool * p_erase_bonds)
     err_code = bsp_init(BSP_INIT_LEDS | BSP_INIT_BUTTONS, bsp_event_handler);
     APP_ERROR_CHECK(err_code);
 
+    err_code = bsp_event_to_button_action_assign(BTN_ID_SLEEP,
+                                                 BSP_BUTTON_ACTION_LONG_PUSH,
+                                                 BSP_EVENT_SLEEP);
+    APP_ERROR_CHECK(err_code);
+
     err_code = bsp_btn_ble_init(NULL, &startup_event);
     APP_ERROR_CHECK(err_code);
 
@@ -1099,24 +1195,6 @@ static void idle_state_handle(void)
 }
 
 
-/**@brief Function for starting advertising.
- */
-static void advertising_start(void * p_erase_bonds)
-{
-    bool erase_bonds = *(bool*)p_erase_bonds;
-
-    if (erase_bonds)
-    {
-        delete_bonds();
-        // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
-    }
-    else
-    {
-        ret_code_t err_code = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-        APP_ERROR_CHECK(err_code);
-    }
-}
-
 void do_something(int16_t * p_buffer, uint32_t sn)
 {
     ret_code_t err_code;
@@ -1186,6 +1264,8 @@ void do_something(int16_t * p_buffer, uint32_t sn)
     }
 }
 
+/**@brief Function for bottom-half (deferred interrupt handling) thread.
+ */
 static void bottom_thread(void * arg)
 {
     ret_code_t  err_code;
@@ -1198,6 +1278,31 @@ static void bottom_thread(void * arg)
 
     ks1092_init(&ks1092_dev);
     qmi8658a_init(&qmi8658a_dev);
+
+    nrf_libuarte_async_config_t nrf_libuarte_async_config = {
+            .tx_pin     = TX_PIN_NUMBER,
+            .rx_pin     = RX_PIN_NUMBER,
+            .baudrate   = NRF_UARTE_BAUDRATE_115200,
+            .parity     = NRF_UARTE_PARITY_EXCLUDED,
+            .hwfc       = NRF_UARTE_HWFC_DISABLED,
+            .timeout_us = 100,
+            .int_prio   = APP_IRQ_PRIORITY_LOW
+    };
+
+    err_code = nrf_libuarte_async_init(&libuarte, &nrf_libuarte_async_config, uart_event_handler, (void *)&libuarte);
+
+    APP_ERROR_CHECK(err_code);
+
+    nrf_libuarte_async_enable(&libuarte);
+
+    static uint8_t text[] = "hello libuarte!\r\n";
+
+    for (;;)
+    {
+        err_code = nrf_libuarte_async_tx(&libuarte, text, sizeof(text));
+        APP_ERROR_CHECK(err_code);
+        vTaskDelay(1024);
+    }
 
     for(;;)
     {
@@ -1305,6 +1410,13 @@ static void bottom_thread(void * arg)
     }
 }
 
+/**@brief Function for log power-on reset reason
+ */
+void log_reset_reason(uint32_t reason)
+{
+    //
+}
+
 /**@brief Function for application main entry.
  */
 int main(void)
@@ -1312,8 +1424,12 @@ int main(void)
     ret_code_t err_code;
     bool erase_bonds;
 
+    // this is going to be initialized by ble stack
+    // nrf_drv_clock_init();
+
     // Initialize.
     log_init();
+    NRF_LOG_RAW_INFO("\n^^^ sleepmon start ^^^\n");
 
  #if NRF_LOG_ENABLED
     // Start execution.
@@ -1323,8 +1439,15 @@ int main(void)
     }
 #endif
 
+    // https://devzone.nordicsemi.com/f/nordic-q-a/38405/detect-wake-up-reason-from-deep-sleep
+    uint32_t reset_reason = 0;
+    reset_reason = nrf_power_resetreas_get();   // NRF_POWER->RESETREAS;
+    NRF_LOG_INFO("reset reason: 0x%08x", reset_reason);
+    nrf_power_resetreas_clear(reset_reason);    // NRF_POWER->RESETREAS = NRF_POWER->RESETREAS;
+
     timers_init();
     buttons_leds_init(&erase_bonds);
+
     power_management_init();
     ble_stack_init();
     gap_params_init();
@@ -1341,8 +1464,6 @@ int main(void)
     APP_ERROR_CHECK(err_code);
 
     // Start execution.
-    // SEGGER_RTT_WriteString(0, "\n^^^ rtt ^^^\n");
-    NRF_LOG_RAW_INFO("\n^^^ sleepmon start ^^^\n");
     nrf_sdh_freertos_init(advertising_start, &erase_bonds);
 
     m_beq = xQueueCreate(BEVENTS_IN_QUEUE, sizeof(BottomEvent_t));

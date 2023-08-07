@@ -125,7 +125,7 @@ static void qmi8658a_reset(qmi8658a_dev_t * p_dev)
 {
 //    uint8_t val = QMI8658A_REG_RESET_VAL;
 //    qmi8658a_write(QMI8658A_REG_RESET, &val, 1);
-
+    (void)qmi8658a_reset;
 
     qmi8658a_write_single(p_dev, 0x60, 0xB0);
     vTaskDelay(10);
@@ -138,6 +138,8 @@ static void qmi8658a_reset(qmi8658a_dev_t * p_dev)
 
 void qmi8658a_config(qmi8658a_dev_t * p_dev)
 {
+    (void)qmi8658a_config;
+
     qmi8658a_write(p_dev, QMI8658A_REG_CTRL1, qmi8658a_init_cfg, sizeof(qmi8658a_init_cfg));
 
     uint8_t out_data[sizeof(qmi8658a_init_cfg)] = {0};
@@ -150,6 +152,7 @@ void qmi8658a_config(qmi8658a_dev_t * p_dev)
 
 static void qmi8658a_enable(qmi8658a_dev_t * p_dev)
 {
+    (void)qmi8658a_enable;
 //    uint8_t val = QMI8658A_REG_CTRL1_ENABLE;        // enable sensor and int2
 //    qmi8658a_write(QMI8658A_REG_CTRL1, &val, 1);
 
