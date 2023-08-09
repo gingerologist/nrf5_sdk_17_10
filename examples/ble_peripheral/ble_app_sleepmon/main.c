@@ -102,8 +102,8 @@
 #define BTN_ID_WAKEUP                   0
 #define BTN_ID_SLEEP                    0
 
-#define DEVICE_NAME                     "Nordic_Template"                       /**< Name of device. Will be included in the advertising data. */
-#define MANUFACTURER_NAME               "NordicSemiconductor"                   /**< Manufacturer. Will be passed to Device Information Service. */
+#define DEVICE_NAME                     "SleepWell"                             /**< Name of device. Will be included in the advertising data. */
+#define MANUFACTURER_NAME               "SleepExpert Healthcare"                /**< Manufacturer. Will be passed to Device Information Service. */
 #define APP_ADV_FAST_INTERVAL           300                                     /**< The advertising interval (in units of 0.625 ms. This value corresponds to 187.5 ms). */
 #define APP_ADV_FAST_DURATION           6000                                    /**< The advertising duration (60 seconds) in units of 10 milliseconds. */
 #define APP_ADV_SLOW_INTERVAL           3000                                    // 1.875s
@@ -311,18 +311,72 @@ static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t a
 #define SAMPLE_TYPE_EEG         0x01
 #define SAMPLE_TYPE_IMU         0x02
 
+/*
+ *
+ */
 #define SAMPLES_IN_BUFFER       120
 
 static const nrf_drv_timer_t    m_adc_timer = NRF_DRV_TIMER_INSTANCE(1);
 static nrf_ppi_channel_t        m_ppi_channel;
 
 typedef __packed struct {
-    uint8_t type;
-    uint8_t version;            // 1
-    uint16_t length;            // fixed 244
-    uint32_t seq_num;
-    int16_t sample[SAMPLES_IN_BUFFER];
+    uint8_t     type;
+    uint8_t     version;        // 1
+    uint16_t    length;         // fixed 244
+    uint32_t    seq_num;
+    int16_t     sample[SAMPLES_IN_BUFFER];
 } sample_packet_t;
+
+typedef __packed struct sens_packet
+{
+    uint8_t preamble[8];
+    uint16_t packet_type;
+    uint16_t payload_len;
+
+    uint8_t brief_tlv_type;
+    uint16_t brief_tlv_len;
+    uint16_t sensor_id;
+    uint8_t brief_version;
+    uint8_t instance_id;
+    uint16_t brief_sampling_rate;
+    uint8_t brief_sr_unit;
+    uint8_t brief_resolution;
+    uint16_t brief_vref;
+    uint16_t brief_num_of_samples;
+
+    uint8_t raw_tlv_type;               // 0x00
+    uint16_t raw_tlv_len;               // 120
+    int16_t sample[SAMPLES_IN_BUFFER];
+
+    uint8_t cka;
+    uint8_t ckb;
+} sens_packet_t;
+
+STATIC_ASSERT(sizeof(sens_packet_t) == 272);
+
+#define SENS_BRIEF_TLV_LEN          12
+#define SENS_PAYLOAD_LEN            (3 + SENS_BRIEF_TLV_LEN + 3 + SAMPLES_IN_BUFFER * sizeof(uint16_t))
+// TODO #define SENS_BRIEF_RESOLUTION       ((NRFX_SAADC_CONFIG_RESOLUTION == 0) ? 8 : )
+
+static sens_packet_t sens_packet_buffer = {
+    .preamble = { 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0xd5 },
+    .packet_type = 0x0101,
+    .payload_len = SENS_PAYLOAD_LEN,
+
+    .brief_tlv_type = 0xff,
+    .brief_tlv_len = SENS_BRIEF_TLV_LEN,
+    .sensor_id = 0xfff0,
+    .brief_version = 0x00,
+    .instance_id = 0x00,
+    .brief_sampling_rate = 250,
+    .brief_sr_unit = 0,
+    .brief_resolution = 14,
+    .brief_vref = 600,
+    .brief_num_of_samples = SAMPLES_IN_BUFFER,
+
+    .raw_tlv_type = 0x00,
+    .raw_tlv_len = SAMPLES_IN_BUFFER * sizeof(uint16_t)
+};
 
 static sample_packet_t          m_eeg_packet[2] __attribute__((aligned(0x4))) = {
     { .type = SAMPLE_TYPE_EEG,
@@ -374,18 +428,24 @@ static void adc_timer_handler(nrf_timer_event_t event_type, void * p_context)
 static void saadc_init(void)
 {
     ret_code_t err_code;
-    nrf_saadc_channel_config_t channel_0_config =
-        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN1);
 
-    channel_0_config.gain = NRF_SAADC_GAIN1_4;
 
 //    nrf_saadc_channel_config_t channel_1_config =
 //        NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
 
 //    channel_1_config.gain = NRF_SAADC_GAIN1_4;
 
-    err_code = nrf_drv_saadc_init(NULL, saadc_callback);
+    nrf_drv_saadc_config_t saadc_config = NRFX_SAADC_DEFAULT_CONFIG;
+    saadc_config.oversample = NRF_SAADC_OVERSAMPLE_8X;
+
+    err_code = nrf_drv_saadc_init(&saadc_config, saadc_callback);
     APP_ERROR_CHECK(err_code);
+
+    nrf_saadc_channel_config_t channel_0_config =
+    NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
+
+    channel_0_config.gain = NRF_SAADC_GAIN1_4;
+    channel_0_config.burst = NRF_SAADC_BURST_ENABLED;
 
     err_code = nrf_drv_saadc_channel_init(0, &channel_0_config);
     APP_ERROR_CHECK(err_code);
@@ -422,29 +482,46 @@ static void saadc_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
+static uint16_t eeg_sampling_rate()
+{
+    switch (m_eeg.sps_shadow)
+    {
+        case 1:
+            return 250;
+        default:
+            return 125;
+    }
+}
+
 /*
  * enable adc timer (according to m_eeg.sps_shadow) and ppi channel
  */
 void saadc_sampling_event_enable(void)
 {
     ret_code_t err_code;
-    uint32_t period;
-    uint8_t sps = m_eeg.sps_shadow;
-    if (sps == 0)
-    {
-      period = 8; // 125sps
-      NRF_LOG_INFO("Set sampling rate to 125sps (8ms)");
-    }
-    else if (sps == 1)
-    {
-      period = 4; // 250sps
-      NRF_LOG_INFO("Set sampling rate to 250sps (4ms)");
-    }
-    else
-    {
-      period = 8; // default 125sps
-      NRF_LOG_INFO("Set sampling rate to 125sps (8ms, fallback)");
-    }
+
+    uint16_t sampling_rate = eeg_sampling_rate();
+    uint32_t period = 1000 / sampling_rate;
+
+    NRF_LOG_INFO("Set sampling rate to %d sps (%d ms)", sampling_rate, period);
+
+//    uint32_t period;
+//    uint8_t sps = m_eeg.sps_shadow;
+//    if (sps == 0)
+//    {
+//      period = 8; // 125sps
+//      NRF_LOG_INFO("Set sampling rate to 125sps (8ms)");
+//    }
+//    else if (sps == 1)
+//    {
+//      period = 4; // 250sps
+//      NRF_LOG_INFO("Set sampling rate to 250sps (4ms)");
+//    }
+//    else
+//    {
+//      period = 8; // default 125sps
+//      NRF_LOG_INFO("Set sampling rate to 125sps (8ms, fallback)");
+//    }
 
     uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_adc_timer, period);
     nrf_drv_timer_extended_compare(&m_adc_timer,
@@ -1194,45 +1271,64 @@ static void idle_state_handle(void)
     }
 }
 
+static void simple_crc(uint8_t * buf, uint8_t * cka, uint8_t * ckb)
+{
+    int num = cka - buf;
+    *cka = 0;
+    *ckb = 0;
+    for (int i = 0; i < num; i++)
+    {
+        *cka = *cka + buf[i];
+        *ckb = *ckb + *cka;
+    }
+}
 
-void do_something(int16_t * p_buffer, uint32_t sn)
+static void sens_log(uint16_t sampling_rate, int16_t sample[], uint16_t num_of_samples)
 {
     ret_code_t err_code;
-    sample_packet_t * pkt = NULL;
+
+    for (int i = 0; i < num_of_samples; i++)
+    {
+        sens_packet_buffer.sample[i] = sample[i];
+    }
+
+    // memcpy(&sens_packet_buffer.sample[0], sample, sizeof(int16_t) * num_of_samples);
+    sens_packet_buffer.brief_sampling_rate = sampling_rate;
+    sens_packet_buffer.brief_num_of_samples = num_of_samples;
+
+    simple_crc((uint8_t *)&sens_packet_buffer.packet_type, &sens_packet_buffer.cka, &sens_packet_buffer.ckb);
+
+    err_code = nrf_libuarte_async_tx(&libuarte, (uint8_t *)&sens_packet_buffer, sizeof(sens_packet_buffer));
+    APP_ERROR_CHECK(err_code);
+}
+
+static void handle_adc_data(int16_t * p_buffer, uint32_t sn)
+{
+    ret_code_t err_code;
+    sample_packet_t * ble_pkt = NULL;
+
+    sens_log(eeg_sampling_rate(), p_buffer, SAMPLES_IN_BUFFER);
 
     if (p_buffer == m_eeg_packet[0].sample)
     {
-        pkt = &m_eeg_packet[0];
+        ble_pkt = &m_eeg_packet[0];
     }
     else
     {
-        pkt = &m_eeg_packet[1];
+        ble_pkt = &m_eeg_packet[1];
     }
 
-    pkt->seq_num = sn;
+    ble_pkt->seq_num = sn;
 
     uint16_t len = sizeof(m_eeg_packet[0]);
-
-    int left = 0;
-    int right = 0;
-    for (int j = 0; j < SAMPLES_IN_BUFFER / 2; j++)
-    {
-      left += p_buffer[2 * j];
-      right += p_buffer[2 * j + 1];
-    }
-
-    left = left / (SAMPLES_IN_BUFFER / 2);
-    right = right / (SAMPLES_IN_BUFFER / 2);
-
-    // NRF_LOG_INFO("sn %d, l %d, r %d", sn, left, right);
 
     ble_gatts_hvx_params_t hvx_params = {0};
 
     hvx_params.handle = m_eeg.samples_handles.value_handle; // p_hrs->hrm_handles.value_handle;
     hvx_params.type   = BLE_GATT_HVX_NOTIFICATION;
     hvx_params.offset = 0;
-    hvx_params.p_len  = &len;                   // this is a bidirectional param
-    hvx_params.p_data = (uint8_t*)pkt;
+    hvx_params.p_len  = &len;                               // this is a bidirectional param
+    hvx_params.p_data = (uint8_t*)ble_pkt;
 
     // is this required?
     if (m_eeg.conn_handle == BLE_CONN_HANDLE_INVALID)
@@ -1295,15 +1391,6 @@ static void bottom_thread(void * arg)
 
     nrf_libuarte_async_enable(&libuarte);
 
-    static uint8_t text[] = "hello libuarte!\r\n";
-
-    for (;;)
-    {
-        err_code = nrf_libuarte_async_tx(&libuarte, text, sizeof(text));
-        APP_ERROR_CHECK(err_code);
-        vTaskDelay(1024);
-    }
-
     for(;;)
     {
         BottomEvent_t be;
@@ -1345,7 +1432,7 @@ static void bottom_thread(void * arg)
         case BE_SAADC: {
             if (eeg_sample_notifying())
             {
-                do_something((int16_t*)be.p_data, eeg_seq_num++);
+                handle_adc_data((int16_t*)be.p_data, eeg_seq_num++);
             }
         } break;
         case BE_IMUINT2:
