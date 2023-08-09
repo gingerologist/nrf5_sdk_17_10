@@ -90,6 +90,8 @@
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
+// #include "nrf_uart.h"
+
 #include "app_timer.h"
 #include "app_error.h"
 #include "ks1092.h"
@@ -1377,7 +1379,7 @@ static void bottom_thread(void * arg)
 
     nrf_libuarte_async_config_t nrf_libuarte_async_config = {
             .tx_pin     = TX_PIN_NUMBER,
-            .rx_pin     = RX_PIN_NUMBER,
+            .rx_pin     = NRF_UARTE_PSEL_DISCONNECTED,
             .baudrate   = NRF_UARTE_BAUDRATE_115200,
             .parity     = NRF_UARTE_PARITY_EXCLUDED,
             .hwfc       = NRF_UARTE_HWFC_DISABLED,
