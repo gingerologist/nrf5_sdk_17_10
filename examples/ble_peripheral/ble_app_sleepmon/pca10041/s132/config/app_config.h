@@ -26,6 +26,7 @@
 /*
  * Timer 1 is used for saadc sampling
  * Timer 2 is used for libuarte
+ * Timer 3 is used for stimulus (gpiote)
  */
 #define NRFX_TIMER_ENABLED                              1
 #define NRFX_TIMER1_ENABLED                             1

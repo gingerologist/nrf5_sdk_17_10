@@ -58,9 +58,13 @@
 #include "nordic_common.h"
 #include "nrf.h"
 #include "nrf_power.h"
+
+#include "nrfx_gpiote.h"
+
 #include "nrf_drv_saadc.h"
 #include "nrf_drv_ppi.h"
 #include "nrf_drv_timer.h"
+// #include "nrf_drv_gpiote.h" use nrfx driver whenever possible since it's directly documented.
 #include "nrf_twi_mngr.h"
 #include "nrf_libuarte_async.h"
 
@@ -91,6 +95,14 @@
 #include "nrf_log_default_backends.h"
 
 // #include "nrf_uart.h"
+
+/**********************************************************************
+ * MACROS
+ */
+
+/**********************************************************************
+ * CONSTANTS
+ */
 
 #include "app_timer.h"
 #include "app_error.h"
@@ -126,9 +138,23 @@
 
 #define DEAD_BEEF                       0xDEADBEEF                              /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
+/*********************************************************************
+ * TYPEDEFS
+ */
+
+/**********************************************************************
+ * GLOBAL VARIABLES
+ */
+
+/*********************************************************************
+ * LOCAL VARIABLES
+ */
+
 #if NRF_LOG_ENABLED
 static TaskHandle_t m_logger_thread;                                            /**< Definition of Logger thread. */
 #endif
+
+
 
 BLE_EEG_DEF(m_eeg);
 NRF_BLE_GATT_DEF(m_gatt);                                                       /**< GATT module instance. */
@@ -231,6 +257,22 @@ typedef struct {
 
 NRF_QUEUE_DEF(buffer_t, m_buf_queue, 10, NRF_QUEUE_MODE_NO_OVERFLOW);
 
+/*********************************************************************
+ * LOCAL FUNCTIONS
+ */
+
+/*********************************************************************
+ * EXTERN FUNCTIONS
+ */
+
+/*********************************************************************
+ * PROFILE CALLBACKS
+ */
+
+/**********************************************************************
+ * PUBLIC FUNCTIONS
+ */
+
 void uart_event_handler(void * context, nrf_libuarte_async_evt_t * p_evt)
 {
     nrf_libuarte_async_t * p_libuarte = (nrf_libuarte_async_t *)context;
@@ -319,7 +361,11 @@ static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t a
 #define SAMPLES_IN_BUFFER       120
 
 static const nrf_drv_timer_t    m_adc_timer = NRF_DRV_TIMER_INSTANCE(1);
-static nrf_ppi_channel_t        m_ppi_channel;
+static nrf_ppi_channel_t        m_ppi_channel,
+                                channel_13_up, channel_13_down, channel_14_up, channel_14_down,
+                                channel_15_up, channel_15_down, channel_16_up, channel_16_down;
+
+static const nrf_drv_timer_t    m_stim_timer = NRF_DRV_TIMER_INSTANCE(3);
 
 typedef __packed struct {
     uint8_t     type;
@@ -543,6 +589,145 @@ void saadc_sampling_event_disable(void)
     APP_ERROR_CHECK(err_code);
 
     nrf_drv_timer_disable(&m_adc_timer);
+}
+
+static void stim_timer_handler(nrf_timer_event_t event_type, void * p_context)
+{
+}
+
+void stim_init(void)
+{
+    ret_code_t err_code;
+
+    if (!nrfx_gpiote_is_init())
+    {
+        nrfx_gpiote_init();
+    }
+
+    // configure gpio 13-16 in toggle task mode
+    nrfx_gpiote_out_config_t pin_outcfg = NRFX_GPIOTE_CONFIG_OUT_TASK_TOGGLE(false); // init_high = false
+    nrfx_gpiote_out_init(13, &pin_outcfg);
+    nrfx_gpiote_out_init(14, &pin_outcfg);
+    nrfx_gpiote_out_init(15, &pin_outcfg);
+    nrfx_gpiote_out_init(16, &pin_outcfg);
+
+    // only create the timer, neither configured nor enabled
+    nrf_drv_timer_config_t timer_cfg = NRF_DRV_TIMER_DEFAULT_CONFIG;
+    timer_cfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
+    err_code = nrf_drv_timer_init(&m_stim_timer, &timer_cfg, stim_timer_handler);
+    APP_ERROR_CHECK(err_code);
+
+    uint32_t timer_compare_event_addr0 = nrf_drv_timer_compare_event_address_get(&m_stim_timer, NRF_TIMER_CC_CHANNEL0);
+    uint32_t timer_compare_event_addr1 = nrf_drv_timer_compare_event_address_get(&m_stim_timer, NRF_TIMER_CC_CHANNEL1);
+    uint32_t timer_compare_event_addr2 = nrf_drv_timer_compare_event_address_get(&m_stim_timer, NRF_TIMER_CC_CHANNEL2);
+    uint32_t timer_compare_event_addr3 = nrf_drv_timer_compare_event_address_get(&m_stim_timer, NRF_TIMER_CC_CHANNEL3);
+
+    uint32_t stim_pin13_task_addr = nrfx_gpiote_out_task_addr_get (13);
+    uint32_t stim_pin14_task_addr = nrfx_gpiote_out_task_addr_get (14);
+    uint32_t stim_pin15_task_addr = nrfx_gpiote_out_task_addr_get (15);
+    uint32_t stim_pin16_task_addr = nrfx_gpiote_out_task_addr_get (16);
+
+    // err_code = nrf_drv_ppi_channel_alloc(&
+    err_code = nrf_drv_ppi_channel_alloc(&channel_13_up);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_13_up, timer_compare_event_addr0, stim_pin13_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_15_up);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_15_up, timer_compare_event_addr0, stim_pin15_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_13_down);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_13_down, timer_compare_event_addr1, stim_pin13_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_15_down);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_15_down, timer_compare_event_addr1, stim_pin15_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_14_up);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_14_up, timer_compare_event_addr2, stim_pin14_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_16_up);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_16_up, timer_compare_event_addr2, stim_pin15_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_14_down);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_14_down, timer_compare_event_addr3, stim_pin14_task_addr);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrf_drv_ppi_channel_alloc(&channel_16_down);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_ppi_channel_assign(channel_16_down, timer_compare_event_addr3, stim_pin16_task_addr);
+    APP_ERROR_CHECK(err_code);
+}
+
+/**
+ * This function configure timer, enable it, enable ppi, enable stim pin output
+ */
+static void stim_enable() {
+    // configure timer
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL0, 10, false);
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL1, 50, false);
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL2, 60, false);
+    nrf_drv_timer_extended_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL3, 100, NRF_TIMER_SHORT_COMPARE3_CLEAR_MASK, false);
+
+    // prepare gpio
+    nrfx_gpiote_out_clear(13);
+    nrfx_gpiote_out_clear(14);
+    nrfx_gpiote_out_clear(15);
+    nrfx_gpiote_out_clear(16);
+
+    // enable gpio task
+    nrfx_gpiote_out_task_enable(13);
+    nrfx_gpiote_out_task_enable(14);
+    nrfx_gpiote_out_task_enable(15);
+    nrfx_gpiote_out_task_enable(16);
+
+    // enable ppi channel
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_13_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_14_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_15_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_16_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_13_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_14_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_15_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_16_down));
+
+    nrf_drv_timer_enable(&m_stim_timer);
+}
+
+static void stim_disable() {
+    nrf_drv_timer_disable(&m_stim_timer);
+
+    // disable ppi channel
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_13_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_14_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_15_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_16_up));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_13_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_14_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_15_down));
+    APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_16_down));
+
+    // disable gpio task
+    nrfx_gpiote_out_task_disable(13);
+    nrfx_gpiote_out_task_disable(14);
+    nrfx_gpiote_out_task_disable(15);
+    nrfx_gpiote_out_task_disable(16);
+
+    // reset gpio
+    nrfx_gpiote_out_clear(13);
+    nrfx_gpiote_out_clear(14);
+    nrfx_gpiote_out_clear(15);
+    nrfx_gpiote_out_clear(16);
 }
 
 static void on_eeg_evt(ble_eeg_t * p_eeg, ble_eeg_evt_t * p_evt)
