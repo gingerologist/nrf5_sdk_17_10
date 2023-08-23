@@ -367,7 +367,7 @@ static nrf_ppi_channel_t        m_ppi_channel,
 
 static const nrf_drv_timer_t    m_stim_timer = NRF_DRV_TIMER_INSTANCE(3);
 
-typedef __packed struct {
+typedef struct __attribute__((packed)) sample_packet {
     uint8_t     type;
     uint8_t     version;        // 1
     uint16_t    length;         // fixed 244
@@ -375,7 +375,7 @@ typedef __packed struct {
     int16_t     sample[SAMPLES_IN_BUFFER];
 } sample_packet_t;
 
-typedef __packed struct sens_packet
+typedef struct __attribute__((packed)) sens_packet
 {
     uint8_t preamble[8];
     uint16_t packet_type;
