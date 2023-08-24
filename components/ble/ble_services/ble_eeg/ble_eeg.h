@@ -37,13 +37,13 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  */
- 
+
 /*
  * https://devzone.nordicsemi.com/guides/short-range-guides/b/bluetooth-low-energy/posts/ble-services-a-beginners-tutorial
  * https://github.com/bjornspockeli/custom_ble_service_example
  */
- 
- 
+
+
 /** @file
  *
  * @defgroup ble_bas EEG Service
@@ -90,11 +90,12 @@ extern "C" {
 // base uuid 9be60000-929b-4a95-bf8d-c012badc07f7
 #define BLE_EEG_SERVICE_UUID_BASE \
   {0xf7, 0x07, 0xdc, 0xba, 0x12, 0xc0, 0x8d, 0xbf, 0x95, 0x4a, 0x9b, 0x92, 0x00, 0x00, 0xe6, 0x9b}
-  
-#define BLE_EEG_SERVICE_UUID          0x0000
-#define BLE_EEG_CHAR_SAMPLE_UUID      0x0001  
-#define BLE_EEG_CHAR_SPS_UUID         0x0002
-#define BLE_EEG_CHAR_GAIN_UUID        0x0003
+
+#define BLE_EEG_SERVICE_UUID            0x0000
+#define BLE_EEG_CHAR_SAMPLE_UUID        0x0001
+#define BLE_EEG_CHAR_SPS_UUID           0x0002
+#define BLE_EEG_CHAR_GAIN_UUID          0x0003
+#define BLE_EEG_CHAR_STIM_UUID          0x0004
 
 
 /**@brief Macro for defining a ble_bas instance.
@@ -131,52 +132,58 @@ typedef void (* ble_eeg_evt_handler_t) (ble_eeg_t * p_eeg, ble_eeg_evt_t * p_evt
 typedef void (* ble_eeg_sample_notification_enable_disable_t) ();
 typedef void (* ble_eeg_sps_write_handler_t) (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_sps);
 typedef void (* ble_eeg_gain_write_handler_t) (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_gain);
+typedef void (* ble_eeg_stim_write_handler_t) (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_stim);
 
 /**@brief EEG Service init structure. This contains all options and data needed for
  *        initialization of the service.*/
 typedef struct
 {
-    ble_eeg_evt_handler_t  evt_handler;                    /**< Event handler to be called for handling events in the EEG Service. */
-//    bool                   support_notification;           /**< TRUE if notification of Battery Level measurement is supported. */
-  
-    // only for HID in original ble_bas
-//    ble_srv_report_ref_t * p_report_ref;                   /**< If not NULL, a Report Reference descriptor with the specified value will be added to the Battery Level characteristic */
-  
-    // 
-//    uint8_t                initial_batt_level;             /**< Initial battery level */
-//    security_req_t         bl_rd_sec;                      /**< Security requirement for reading the BL characteristic value. */
-//    security_req_t         bl_cccd_wr_sec;                 /**< Security requirement for writing the BL characteristic CCCD. */
-//    security_req_t         bl_report_rd_sec;               /**< Security requirement for reading the BL characteristic descriptor. */
-  
+    ble_eeg_evt_handler_t   evt_handler;                /**< Event handler to be called for handling events in the EEG Service. */
+//  bool                    support_notification;       /**< TRUE if notification of Battery Level measurement is supported. */
+
+//  only for HID in original ble_bas
+//  ble_srv_report_ref_t *  p_report_ref;               /**< If not NULL, a Report Reference descriptor with the specified value will be added to the Battery Level characteristic */
+
+//  uint8_t                 initial_batt_level;         /**< Initial battery level */
+//  security_req_t          bl_rd_sec;                  /**< Security requirement for reading the BL characteristic value. */
+//  security_req_t          bl_cccd_wr_sec;             /**< Security requirement for writing the BL characteristic CCCD. */
+//  security_req_t          bl_report_rd_sec;           /**< Security requirement for reading the BL characteristic descriptor. */
+
     uint8_t                 initial_sps;                // 0x00 for 100sps, 01 for 200sps (default)
     uint8_t                 initial_gain;               // 0x00 to 0x07 TODO
-  
-    ble_eeg_sample_notification_enable_disable_t sample_notification_enabled;
-    ble_eeg_sample_notification_enable_disable_t sample_notification_disabled;
-    ble_eeg_sps_write_handler_t   sps_write_handler;
-    ble_eeg_gain_write_handler_t  gain_write_handler;
+    uint8_t                 initial_stim;               // 0x00
+
+    ble_eeg_sample_notification_enable_disable_t        sample_notification_enabled;
+    ble_eeg_sample_notification_enable_disable_t        sample_notification_disabled;
+
+    ble_eeg_sps_write_handler_t                         sps_write_handler;
+    ble_eeg_gain_write_handler_t                        gain_write_handler;
+    ble_eeg_stim_write_handler_t                        stim_write_handler;
 } ble_eeg_init_t;
 
 /**@brief EEG Service structure. This contains various status information for the service. */
 struct ble_eeg_s
 {
-    ble_eeg_evt_handler_t     evt_handler;               // Event handler to be called for handling events in the EEG Service.
-    uint16_t                  service_handle;            // Handle of EEG Service (as provided by the BLE stack).
-    ble_gatts_char_handles_t  sps_handles;               // Handles related to the SPS characteristic.
-    ble_gatts_char_handles_t  gain_handles;              // Handles related to the Gain characteristic.
-    ble_gatts_char_handles_t  samples_handles;           // Handles related to the Samples (Data) characteristic.
-    uint8_t                   samples_last;              // Last Battery Level measurement passed to the EEG Service.
+    ble_eeg_evt_handler_t     evt_handler;              // Event handler to be called for handling events in the EEG Service.
+    uint16_t                  service_handle;           // Handle of EEG Service (as provided by the BLE stack).
+    ble_gatts_char_handles_t  sps_handles;              // Handles related to the SPS characteristic.
+    ble_gatts_char_handles_t  gain_handles;             // Handles related to the Gain characteristic.
+    ble_gatts_char_handles_t  samples_handles;          // Handles related to the Samples (Data) characteristic.
+    ble_gatts_char_handles_t  stim_handles;             // Handles related to the Stim characteristic.
+    uint8_t                   samples_last;             // Last Battery Level measurement passed to the EEG Service.
+
     uint8_t                   uuid_type;
     uint8_t                   sps_shadow;
     uint8_t                   gain_shadow;
 
     uint16_t                  conn_handle;
     bool                      sample_notifying;
-  
-    ble_eeg_sample_notification_enable_disable_t sample_notification_enabled;
-    ble_eeg_sample_notification_enable_disable_t sample_notification_disabled;  
-    ble_eeg_sps_write_handler_t   sps_write_handler;
-    ble_eeg_gain_write_handler_t  gain_write_handler;
+
+    ble_eeg_sample_notification_enable_disable_t        sample_notification_enabled;
+    ble_eeg_sample_notification_enable_disable_t        sample_notification_disabled;
+    ble_eeg_sps_write_handler_t                         sps_write_handler;
+    ble_eeg_gain_write_handler_t                        gain_write_handler;
+    ble_eeg_stim_write_handler_t                        stim_write_handler;
 };
 
 

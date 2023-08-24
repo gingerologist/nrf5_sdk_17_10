@@ -24,19 +24,26 @@
 #define BLE_EEG_BLE_OBSERVER_PRIO                       2
 
 /*
+ * All five timers are used.
  * Timer 1 is used for saadc sampling
- * Timer 2 is used for libuarte
- * Timer 3 is used for stimulus (gpiote)
+ * Timer 2/3 are used for libUARTE (one for byte counting, one for timeout)
+ * Timer 4 is used for stimulus (gpiote)
  */
 #define NRFX_TIMER_ENABLED                              1
 #define NRFX_TIMER1_ENABLED                             1
 #define NRFX_TIMER2_ENABLED                             1
 #define NRFX_TIMER3_ENABLED                             1
+#define NRFX_TIMER4_ENABLED                             1
 #define TIMER_ENABLED                                   1
 #define TIMER1_ENABLED                                  1
 #define TIMER2_ENABLED                                  1
 #define TIMER3_ENABLED                                  1
+#define TIMER4_ENABLED                                  1
 
+#define SAADC_TIMER_IDX                                 1
+#define LIBUARTE_TIMER0_IDX                             2
+#define LIBUARTE_TIMER1_IDX                             3
+#define STIM_TIMER_IDX                                  4
 
 #define NRFX_PPI_ENABLED                                1
 #define PPI_ENABLED                                     1

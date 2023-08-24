@@ -90,21 +90,8 @@ static void on_write(ble_lbs_t * p_lbs, ble_evt_t const * p_ble_evt)
 static void on_write(ble_eeg_t * p_eeg, ble_evt_t const * p_ble_evt)
 {
     ble_gatts_evt_write_t const * p_evt_write = &p_ble_evt->evt.gatts_evt.params.write;
-  
-    if (    (p_evt_write->handle == p_eeg->sps_handles.value_handle)
-        &&  (p_evt_write->len == 1)
-        &&  (p_eeg->sps_write_handler != NULL))
-    {
-        p_eeg->sps_write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_eeg, p_evt_write->data[0]);
-    }
-    
-    if (    (p_evt_write->handle == p_eeg->gain_handles.value_handle)
-        &&  (p_evt_write->len == 1)
-        &&  (p_eeg->gain_write_handler != NULL))
-    {
-        p_eeg->gain_write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_eeg, p_evt_write->data[0]);
-    }
-    
+
+    // notification cccd
     if (    (p_evt_write->handle == p_eeg->samples_handles.cccd_handle)
         &&  (p_evt_write->len == 2))  // debug confirmed this is 2, but why?
     {
@@ -112,7 +99,7 @@ static void on_write(ble_eeg_t * p_eeg, ble_evt_t const * p_ble_evt)
         {
           return;
         }
-        
+
         if (  ble_srv_is_notification_enabled(p_evt_write->data))
         {
           if (p_eeg->sample_notification_enabled != NULL)
@@ -127,6 +114,30 @@ static void on_write(ble_eeg_t * p_eeg, ble_evt_t const * p_ble_evt)
             p_eeg->sample_notification_disabled();
           }
         }
+    }
+
+    // sps
+    if (    (p_evt_write->handle == p_eeg->sps_handles.value_handle)
+        &&  (p_evt_write->len == 1)
+        &&  (p_eeg->sps_write_handler != NULL))
+    {
+        p_eeg->sps_write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_eeg, p_evt_write->data[0]);
+    }
+
+    // gain
+    if (    (p_evt_write->handle == p_eeg->gain_handles.value_handle)
+        &&  (p_evt_write->len == 1)
+        &&  (p_eeg->gain_write_handler != NULL))
+    {
+        p_eeg->gain_write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_eeg, p_evt_write->data[0]);
+    }
+
+    // stim
+    if (    (p_evt_write->handle == p_eeg->stim_handles.value_handle)
+        &&  (p_evt_write->len == 1)
+        &&  (p_eeg->stim_write_handler != NULL))
+    {
+        p_eeg->stim_write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_eeg, p_evt_write->data[0]);
     }
 
 //    if (    (p_evt_write->handle == p_bas->battery_level_handles.cccd_handle)
@@ -151,9 +162,9 @@ static void on_write(ble_eeg_t * p_eeg, ble_evt_t const * p_ble_evt)
 
 //        // CCCD written, call application event handler.
 //        p_bas->evt_handler(p_bas, &evt);
-//    }  
+//    }
 }
-  
+
 void ble_eeg_on_ble_evt(ble_evt_t const * p_ble_evt, void * p_context)
 {
     if ((p_context == NULL) || (p_ble_evt == NULL))
@@ -195,14 +206,13 @@ typedef struct
 }ble_add_char_user_desc_t;
 #endif
 
-static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
+static ret_code_t sample_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
 {
-    ret_code_t                  err_code;
-    ble_add_char_user_desc_t    user_desc;
-    ble_add_char_params_t       add_char_params;
-    uint8_t                     user_desc_str[] = "SPS";
-    uint8_t                     initial_sps = p_eeg_init->initial_sps;
-  
+    ret_code_t                        err_code;
+    ble_add_char_user_desc_t          user_desc;
+    ble_add_char_params_t             add_char_params;
+    uint8_t                           user_desc_str[] = "Sample";
+
     memset(&user_desc, 0, sizeof(user_desc));
     user_desc.is_var_len              = false;
     user_desc.char_props.read         = 1;
@@ -211,7 +221,48 @@ static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_i
     user_desc.p_char_user_desc        = user_desc_str;
     user_desc.read_access             = SEC_OPEN;
     // user_desc.write_access            = SEC_OPEN;
- 
+
+    memset(&add_char_params, 0, sizeof(add_char_params));
+    add_char_params.uuid              = BLE_EEG_CHAR_SAMPLE_UUID;
+    add_char_params.uuid_type         = p_eeg->uuid_type;
+    add_char_params.max_len           = NRF_SDH_BLE_GATT_MAX_MTU_SIZE - 3; //
+    add_char_params.init_len          = 0;    // this is OK
+    add_char_params.p_init_value      = NULL;
+    add_char_params.is_var_len        = true; //
+    // add_char_params.is_value_user     = BLE_GATTS_VLOC_INVALID; // notification only
+    // add_char_params.char_props.read   = 1;
+    // add_char_params.char_props.write  = 1;
+    add_char_params.char_props.notify = 1;
+    // add_char_params.read_access       = 1;
+    // add_char_params.write_access      = 1;
+    add_char_params.cccd_write_access = SEC_OPEN;
+    add_char_params.p_user_descr      = &user_desc;
+
+    err_code = characteristic_add(p_eeg->service_handle,
+                                  &add_char_params,
+                                  &(p_eeg->samples_handles));
+
+    APP_ERROR_CHECK(err_code);
+    return NRF_SUCCESS;
+}
+
+static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
+{
+    ret_code_t                  err_code;
+    ble_add_char_user_desc_t    user_desc;
+    ble_add_char_params_t       add_char_params;
+    uint8_t                     user_desc_str[] = "SPS";
+    uint8_t                     initial_sps = p_eeg_init->initial_sps;
+
+    memset(&user_desc, 0, sizeof(user_desc));
+    user_desc.is_var_len              = false;
+    user_desc.char_props.read         = 1;
+    user_desc.size                    = (sizeof(user_desc_str) - 1);
+    user_desc.max_size                = (sizeof(user_desc_str) - 1);
+    user_desc.p_char_user_desc        = user_desc_str;
+    user_desc.read_access             = SEC_OPEN;
+    // user_desc.write_access            = SEC_OPEN;
+
     memset(&add_char_params, 0, sizeof(add_char_params));
     add_char_params.uuid              = BLE_EEG_CHAR_SPS_UUID;
     add_char_params.uuid_type         = p_eeg->uuid_type;
@@ -222,12 +273,12 @@ static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_i
     // add_char_params.is_value_user     = BLE_GATTS_VLOC_STACK; // this must be set! otherwise sd_ble_gatts_value_get returns invalid len and data.
     add_char_params.char_props.read   = 1;
     add_char_params.char_props.write  = 1;
-    
+
     // if user_desc.write_access is set to SEC_OPEN then this must be set
     // if user_desc.write_access is set to SEC_NO_ACCESS then this must NOT be set
     // https://infocenter.nordicsemi.com/topic/com.nordic.infocenter.s132.api.v7.3.0/group___b_l_e___g_a_t_t_s___f_u_n_c_t_i_o_n_s.html
-    // add_char_params.char_ext_props.wr_aux = 1;  
-    
+    // add_char_params.char_ext_props.wr_aux = 1;
+
     add_char_params.read_access       = SEC_OPEN;
     add_char_params.write_access      = SEC_OPEN;
     add_char_params.p_user_descr      = &user_desc;
@@ -235,7 +286,7 @@ static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_i
     err_code = characteristic_add(p_eeg->service_handle,
                                   &add_char_params,
                                   &p_eeg->sps_handles);
-    APP_ERROR_CHECK(err_code);                                 
+    APP_ERROR_CHECK(err_code);
     return NRF_SUCCESS;
 }
 
@@ -246,7 +297,7 @@ static ret_code_t gain_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     ble_add_char_params_t       add_char_params;
     uint8_t                     user_desc_str[] = "Gain";
     uint8_t                     initial_gain = p_eeg_init->initial_gain;
-  
+
     memset(&user_desc, 0, sizeof(user_desc));
     user_desc.is_var_len              = false;
     user_desc.char_props.read         = 1;
@@ -254,8 +305,8 @@ static ret_code_t gain_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     user_desc.max_size                = (sizeof(user_desc_str) - 1);
     user_desc.p_char_user_desc        = user_desc_str;
     user_desc.read_access             = SEC_OPEN;
-    // user_desc.write_access            = SEC_OPEN;  
-  
+    // user_desc.write_access            = SEC_OPEN;
+
     memset(&add_char_params, 0, sizeof(add_char_params));
     add_char_params.uuid              = BLE_EEG_CHAR_GAIN_UUID;
     add_char_params.uuid_type         = p_eeg->uuid_type;
@@ -266,7 +317,7 @@ static ret_code_t gain_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     // add_char_params.is_value_user     = BLE_GATTS_VLOC_STACK;
     add_char_params.char_props.read   = 1;
     add_char_params.char_props.write  = 1;
-    
+
     add_char_params.read_access       = SEC_OPEN;
     add_char_params.write_access      = SEC_OPEN;
     add_char_params.p_user_descr      = &user_desc;
@@ -274,46 +325,50 @@ static ret_code_t gain_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     err_code = characteristic_add(p_eeg->service_handle,
                                   &add_char_params,
                                   &p_eeg->gain_handles);
-    APP_ERROR_CHECK(err_code);                                   
+    APP_ERROR_CHECK(err_code);
     return NRF_SUCCESS;
 }
 
-static ret_code_t sample_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
+static ret_code_t stim_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
 {
-    ret_code_t                        err_code;
-    ble_add_char_user_desc_t          user_desc;
-    ble_add_char_params_t             add_char_params;
-    uint8_t                           user_desc_str[] = "Sample";
-  
+    ret_code_t                          err_code;
+    ble_add_char_user_desc_t            user_desc;
+    ble_add_char_params_t               add_char_params;
+    uint8_t                             user_desc_str[] = "STIM";
+    uint8_t                             initial_stim = p_eeg_init->initial_stim;
+
     memset(&user_desc, 0, sizeof(user_desc));
-    user_desc.is_var_len              = false;
-    user_desc.char_props.read         = 1;
-    user_desc.size                    = (sizeof(user_desc_str) - 1);
-    user_desc.max_size                = (sizeof(user_desc_str) - 1);
-    user_desc.p_char_user_desc        = user_desc_str;
-    user_desc.read_access             = SEC_OPEN;
-    // user_desc.write_access            = SEC_OPEN;    
-    
+    user_desc.is_var_len                = false;
+    user_desc.char_props.read           = 1;
+    user_desc.size                      = (sizeof(user_desc_str) - 1);
+    user_desc.max_size                  = (sizeof(user_desc_str) - 1);
+    user_desc.p_char_user_desc          = user_desc_str;
+    user_desc.read_access               = SEC_OPEN;
+    // user_desc.write_access            = SEC_OPEN;
+
     memset(&add_char_params, 0, sizeof(add_char_params));
-    add_char_params.uuid              = BLE_EEG_CHAR_SAMPLE_UUID;
-    add_char_params.uuid_type         = p_eeg->uuid_type;
-    add_char_params.max_len           = NRF_SDH_BLE_GATT_MAX_MTU_SIZE - 3; // 
-    add_char_params.init_len          = 0;    // this is OK
-    add_char_params.p_init_value      = NULL;
-    add_char_params.is_var_len        = true; // 
-    // add_char_params.is_value_user     = BLE_GATTS_VLOC_INVALID; // notification only
-    // add_char_params.char_props.read   = 1;
-    // add_char_params.char_props.write  = 1;
-    add_char_params.char_props.notify = 1;
-    // add_char_params.read_access       = 1;
-    // add_char_params.write_access      = 1;
-    add_char_params.cccd_write_access = SEC_OPEN;
-    add_char_params.p_user_descr      = &user_desc;
-    
+    add_char_params.uuid                = BLE_EEG_CHAR_STIM_UUID;
+    add_char_params.uuid_type           = p_eeg->uuid_type;
+    add_char_params.max_len             = sizeof(uint8_t);
+    add_char_params.init_len            = sizeof(uint8_t);
+    add_char_params.p_init_value        = &initial_stim;
+    add_char_params.is_var_len          = false;
+    // add_char_params.is_value_user    = BLE_GATTS_VLOC_STACK; // ??? this must be set! otherwise sd_ble_gatts_value_get returns invalid len and data.
+    add_char_params.char_props.read     = 1;
+    add_char_params.char_props.write    = 1;
+
+    // if user_desc.write_access is set to SEC_OPEN then this must be set
+    // if user_desc.write_access is set to SEC_NO_ACCESS then this must NOT be set
+    // https://infocenter.nordicsemi.com/topic/com.nordic.infocenter.s132.api.v7.3.0/group___b_l_e___g_a_t_t_s___f_u_n_c_t_i_o_n_s.html
+    // add_char_params.char_ext_props.wr_aux = 1;
+
+    add_char_params.read_access         = SEC_OPEN;
+    add_char_params.write_access        = SEC_OPEN;
+    add_char_params.p_user_descr        = &user_desc;
+
     err_code = characteristic_add(p_eeg->service_handle,
                                   &add_char_params,
-                                  &(p_eeg->samples_handles));
-    
+                                  &p_eeg->stim_handles);
     APP_ERROR_CHECK(err_code);
     return NRF_SUCCESS;
 }
@@ -327,51 +382,57 @@ ret_code_t ble_eeg_init(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
 
   ret_code_t err_code;
   ble_uuid_t ble_uuid;
-  
+
   // Initialize service structure
-  // p_cus->conn_handle               = BLE_CONN_HANDLE_INVALID;
-  
-  p_eeg->evt_handler                  = p_eeg_init->evt_handler;
-  p_eeg->sps_write_handler            = p_eeg_init->sps_write_handler;
-  p_eeg->gain_write_handler           = p_eeg_init->gain_write_handler;
-  p_eeg->sample_notification_enabled  = p_eeg_init->sample_notification_enabled;
-  p_eeg->sample_notification_disabled = p_eeg_init->sample_notification_disabled;
-  p_eeg->conn_handle                  = BLE_CONN_HANDLE_INVALID;
-  p_eeg->sample_notifying             = false;
-  
-  p_eeg->sps_shadow                   = p_eeg_init->initial_sps;
-  p_eeg->gain_shadow                  = p_eeg_init->initial_gain;
-  
+  // p_cus->conn_handle                 = BLE_CONN_HANDLE_INVALID;
+
+  p_eeg->evt_handler                    = p_eeg_init->evt_handler;
+  p_eeg->sps_write_handler              = p_eeg_init->sps_write_handler;
+  p_eeg->gain_write_handler             = p_eeg_init->gain_write_handler;
+  p_eeg->stim_write_handler             = p_eeg_init->stim_write_handler;
+  p_eeg->sample_notification_enabled    = p_eeg_init->sample_notification_enabled;
+  p_eeg->sample_notification_disabled   = p_eeg_init->sample_notification_disabled;
+  p_eeg->conn_handle                    = BLE_CONN_HANDLE_INVALID;
+  p_eeg->sample_notifying               = false;
+
+  p_eeg->sps_shadow                     = p_eeg_init->initial_sps;
+  p_eeg->gain_shadow                    = p_eeg_init->initial_gain;
+
   ble_uuid128_t base_uuid = {BLE_EEG_SERVICE_UUID_BASE};
-  
+
   // this is a service call (SVCALL) defined and documented in ble.h
   err_code = sd_ble_uuid_vs_add(&base_uuid, &p_eeg->uuid_type); // BLE_UUID_TYPE_VENDOR_BEGIN  expected
   VERIFY_SUCCESS(err_code);
-  
+
   ble_uuid.type = p_eeg->uuid_type;
   ble_uuid.uuid = BLE_EEG_SERVICE_UUID;
-  
+
   // Add the Custom Service
   err_code = sd_ble_gatts_service_add(BLE_GATTS_SRVC_TYPE_PRIMARY, &ble_uuid, &p_eeg->service_handle);
   if (err_code != NRF_SUCCESS)
   {
       return err_code;
   }
-  
+
   err_code = sample_char_add(p_eeg, p_eeg_init);
   if (err_code != NRF_SUCCESS)
   {
       return err_code;
   }
-  
+
   err_code = sps_char_add(p_eeg, p_eeg_init);
   if (err_code != NRF_SUCCESS)
   {
       return err_code;
   }
-  
+
   err_code = gain_char_add(p_eeg, p_eeg_init);
-  return err_code;
+  if (err_code != NRF_SUCCESS)
+  {
+    return err_code;
+  }
+
+  return stim_char_add(p_eeg, p_eeg_init);
 }
 
 uint32_t ble_eeg_sample_value_update(ble_eeg_t * p_eeg, uint8_t * p_value)

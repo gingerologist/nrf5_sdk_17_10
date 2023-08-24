@@ -96,9 +96,39 @@
 
 // #include "nrf_uart.h"
 
+#if 0 // example for sd_ble_gatts_value_get
+static bool is_cccd_configured(uint16_t conn_handle)
+{
+    uint32_t          err_code;
+    uint8_t           cccd_value_buf[BLE_CCCD_VALUE_LEN];
+    ble_gatts_value_t value;
+    bool              is_ctrlpt_notif_enabled = false;
+
+    value.len     = BLE_CCCD_VALUE_LEN;
+    value.offset  = 0;
+    value.p_value = cccd_value_buf;
+
+    err_code = sd_ble_gatts_value_get(conn_handle,
+                                      m_char_ctrlpt_handles.cccd_handle,
+                                      &value);
+
+    // TODO: Error codes should be sent back to application indicating that the
+    // read of CCCD did not work. No application error handler is currently
+    // implemented.
+    (void)err_code;
+
+    uint16_t cccd_value = uint16_decode(cccd_value_buf);
+    is_ctrlpt_notif_enabled = ((cccd_value & BLE_GATT_HVX_NOTIFICATION) != 0);
+
+    return is_ctrlpt_notif_enabled;
+}
+#endif
+
 /**********************************************************************
  * MACROS
  */
+#define NOT_INSIDE_ISR          (( SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk ) == 0 )
+#define INSIDE_ISR              (!(NOT_INSIDE_ISR))
 
 /**********************************************************************
  * CONSTANTS
@@ -234,8 +264,8 @@ static ks1092_dev_t ks1092_dev = {
 
 NRF_LIBUARTE_ASYNC_DEFINE(
     libuarte,
-    0,    // _uarte_idx, UARTE instance used.
-    2,    // _timer0_idx, TIMER instance used by libuarte for bytes counting.
+    0,                      // _uarte_idx, UARTE instance used.
+    LIBUARTE_TIMER0_IDX,    // _timer0_idx, TIMER instance used by libuarte for bytes counting.
 
     // _rtc1_idx, RTC instance used for timeout.
     // If set to NRF_LIBUARTE_PERIPHERAL_NOT_USED then TIMER instance is used
@@ -245,7 +275,7 @@ NRF_LIBUARTE_ASYNC_DEFINE(
     // _timer1_idx, TIMER instance used for timeout.
     // If set to NRF_LIBUARTE_PERIPHERAL_NOT_USED then RTC instance is used
     // or app_timer instance if _rtc1_idx is also set to NRF_LIBUARTE_PERIPHERAL_NOT_USED.
-    3,
+    LIBUARTE_TIMER1_IDX,
     255,
     3);
 
@@ -330,18 +360,25 @@ typedef enum BottomEventType
   BE_NOTIFICATION_DISABLED,
   BE_SAADC,
   BE_IMUINT2,
+  BE_STIM,
 } BottomEventType_t;
 
 typedef struct BottomEvent
 {
   BottomEventType_t type;
-  void * p_data;
+  union {
+    void *      p_data;
+    uint32_t    uval;
+    int32_t     ival;
+  } u;
 } BottomEvent_t;
 
 #define BEVENTS_IN_QUEUE        4
 
 static TaskHandle_t             m_bottom_thread;
 QueueHandle_t                   m_beq;
+
+uint8_t                         m_stim_write;   // hold the value and pass the pointer in BottomEvent
 
 static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
 {
@@ -360,12 +397,12 @@ static void qmi8658a_int2_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t a
  */
 #define SAMPLES_IN_BUFFER       120
 
-static const nrf_drv_timer_t    m_adc_timer = NRF_DRV_TIMER_INSTANCE(1);
+static const nrf_drv_timer_t    m_adc_timer = NRF_DRV_TIMER_INSTANCE(SAADC_TIMER_IDX);
 static nrf_ppi_channel_t        m_ppi_channel,
                                 channel_13_up, channel_13_down, channel_14_up, channel_14_down,
                                 channel_15_up, channel_15_down, channel_16_up, channel_16_down;
 
-static const nrf_drv_timer_t    m_stim_timer = NRF_DRV_TIMER_INSTANCE(3);
+static const nrf_drv_timer_t    m_stim_timer = NRF_DRV_TIMER_INSTANCE(STIM_TIMER_IDX);
 
 typedef struct __attribute__((packed)) sample_packet {
     uint8_t     type;
@@ -454,7 +491,7 @@ static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
         if (p_buffer == m_eeg_packet[0].sample || p_buffer == m_eeg_packet[1].sample)
         {
           BottomEvent_t be = { .type = BE_SAADC };
-          be.p_data = p_buffer;
+          be.u.p_data = p_buffer;
           xQueueSendFromISR(m_beq, &be, NULL);
         }
         err_code = nrf_drv_saadc_buffer_convert(p_buffer, SAMPLES_IN_BUFFER);
@@ -595,7 +632,7 @@ static void stim_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
 }
 
-void stim_init(void)
+static void stim_init(void)
 {
     ret_code_t err_code;
 
@@ -671,8 +708,10 @@ void stim_init(void)
 
 /**
  * This function configure timer, enable it, enable ppi, enable stim pin output
+ * the freq is 50 times char value
  */
-static void stim_enable() {
+static void stim_enable(uint8_t freq) {
+
     // configure timer
     nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL0, 10, false);
     nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL1, 50, false);
@@ -780,6 +819,43 @@ static void eeg_gain_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uin
     }
 }
 
+static void eeg_stim_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_stim)
+{
+    ret_code_t err_code;
+    ble_gatts_value_t gatts_value;
+
+    if (p_eeg->sample_notifying) {
+        NRF_LOG_WARNING("stim write %02x rejected for sample notifying", new_stim);
+        return;
+    }
+
+    gatts_value.len = sizeof(uint8_t);
+    gatts_value.offset = 0;
+    gatts_value.p_value = &new_stim;
+
+    err_code = sd_ble_gatts_value_set(conn_handle, p_eeg->sps_handles.value_handle, &gatts_value);
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_WARNING("failed to write stim value, error code: %d", err_code);
+        return;
+    }
+
+    // BE_STIM
+    BottomEvent_t be = {
+        .type = BE_STIM,
+        .u = { .uval = new_stim }
+    };
+
+    if (INSIDE_ISR)
+    {
+        xQueueSendFromISR(m_beq, &be, NULL);
+    }
+    else
+    {
+        xQueueSend(m_beq, &be, NULL);
+    }
+}
+
 static void eeg_sample_notification_enabled()
 {
     m_eeg.sample_notifying = true;
@@ -816,14 +892,16 @@ static void eeg_init(void)
 
     memset(&eeg_init_obj, 0, sizeof(eeg_init_obj));
 
-    eeg_init_obj.evt_handler          = on_eeg_evt;
-    eeg_init_obj.initial_sps          = 1;
-    eeg_init_obj.initial_gain         = 0;
+    eeg_init_obj.evt_handler                    = on_eeg_evt;
+    eeg_init_obj.initial_sps                    = 1;
+    eeg_init_obj.initial_gain                   = 0;
+    eeg_init_obj.initial_stim                   = 0;
 
-    eeg_init_obj.sps_write_handler = eeg_sps_write_handler;
-    eeg_init_obj.gain_write_handler = eeg_gain_write_handler;
-    eeg_init_obj.sample_notification_enabled = eeg_sample_notification_enabled;
-    eeg_init_obj.sample_notification_disabled = eeg_sample_notification_disabled;
+    eeg_init_obj.sps_write_handler              = eeg_sps_write_handler;
+    eeg_init_obj.gain_write_handler             = eeg_gain_write_handler;
+    eeg_init_obj.stim_write_handler             = eeg_stim_write_handler;
+    eeg_init_obj.sample_notification_enabled    = eeg_sample_notification_enabled;
+    eeg_init_obj.sample_notification_disabled   = eeg_sample_notification_disabled;
 
     //eeg_init_obj.
     err_code = ble_eeg_init(&m_eeg, &eeg_init_obj);
@@ -1185,7 +1263,7 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
 static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 {
     ret_code_t err_code = NRF_SUCCESS;
-    BottomEvent_t be = { .type = BE_NONE, .p_data = NULL };
+    BottomEvent_t be = { .type = BE_NONE, .u = { .p_data = NULL } };
 
     switch (p_ble_evt->header.evt_id)
     {
@@ -1619,7 +1697,7 @@ static void bottom_thread(void * arg)
         case BE_SAADC: {
             if (eeg_sample_notifying())
             {
-                handle_adc_data((int16_t*)be.p_data, eeg_seq_num++);
+                handle_adc_data((int16_t*)be.u.p_data, eeg_seq_num++);
             }
         } break;
         case BE_IMUINT2:
@@ -1679,6 +1757,15 @@ static void bottom_thread(void * arg)
                     }
                 }
             }
+            break;
+        case BE_STIM: {
+
+            NRF_LOG_INFO("(stim) write freq %d", be.u.uval);
+
+            break;
+        }
+
+        default:
             break;
         }
     }
