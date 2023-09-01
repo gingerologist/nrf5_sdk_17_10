@@ -56,6 +56,10 @@
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
+#include "nrfx_uart.h"
+
+static nrfx_uart_t m_owuart = NRFX_UART_INSTANCE(0);
+
 /**
  * @brief Function for main application entry.
  */
@@ -70,6 +74,8 @@ int main(void)
 
     NRF_LOG_INFO("hello owuart");
 
+
+    
     while (true)
     {
         NRF_LOG_FLUSH(); // or NRF_LOG_PROCESS by which only one log entry is processed
