@@ -60,11 +60,6 @@
 #include "nrf_log.h"
 NRF_LOG_MODULE_REGISTER();
 
-
-#define INVALID_BATTERY_LEVEL 255
-
-// NRF_LOG_DEFAULT_LEVEL
-
 #include "ble_eeg.h"
 
 #if 0
@@ -86,6 +81,24 @@ static void on_write(ble_lbs_t * p_lbs, ble_evt_t const * p_ble_evt)
 }
 
 #endif
+
+uint8_t eeg_get_gain()
+{
+    return 0; // not implemented yet
+}
+
+void eeg_set_gain(uint8_t gain)
+{
+}
+
+uint8_t eeg_get_sps() {
+    return 0; // not implemented yet
+}
+
+void eeg_set_sps(uint8_t sps) {
+}
+
+
 
 static void on_write(ble_eeg_t * p_eeg, ble_evt_t const * p_ble_evt)
 {
@@ -270,7 +283,7 @@ static ret_code_t sps_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_i
     add_char_params.init_len          = sizeof(uint8_t);
     add_char_params.p_init_value      = &initial_sps;
     add_char_params.is_var_len        = false;
-    // add_char_params.is_value_user     = BLE_GATTS_VLOC_STACK; // this must be set! otherwise sd_ble_gatts_value_get returns invalid len and data.
+    add_char_params.is_value_user     = false;
     add_char_params.char_props.read   = 1;
     add_char_params.char_props.write  = 1;
 
@@ -329,13 +342,26 @@ static ret_code_t gain_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     return NRF_SUCCESS;
 }
 
+static uint8_t stim_value;
+
+void eeg_set_stim(uint8_t new_value)
+{
+    stim_value = new_value;
+}
+
+uint8_t eeg_get_stim()
+{
+    return stim_value;
+}
+
 static ret_code_t stim_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_init)
 {
     ret_code_t                          err_code;
     ble_add_char_user_desc_t            user_desc;
     ble_add_char_params_t               add_char_params;
     uint8_t                             user_desc_str[] = "STIM";
-    uint8_t                             initial_stim = p_eeg_init->initial_stim;
+
+    stim_value = p_eeg_init->initial_stim;
 
     memset(&user_desc, 0, sizeof(user_desc));
     user_desc.is_var_len                = false;
@@ -351,9 +377,9 @@ static ret_code_t stim_char_add(ble_eeg_t * p_eeg, const ble_eeg_init_t * p_eeg_
     add_char_params.uuid_type           = p_eeg->uuid_type;
     add_char_params.max_len             = sizeof(uint8_t);
     add_char_params.init_len            = sizeof(uint8_t);
-    add_char_params.p_init_value        = &initial_stim;
+    add_char_params.p_init_value        = &stim_value;
     add_char_params.is_var_len          = false;
-    // add_char_params.is_value_user    = BLE_GATTS_VLOC_STACK; // ??? this must be set! otherwise sd_ble_gatts_value_get returns invalid len and data.
+    add_char_params.is_value_user       = true;
     add_char_params.char_props.read     = 1;
     add_char_params.char_props.write    = 1;
 

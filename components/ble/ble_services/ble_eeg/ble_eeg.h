@@ -186,6 +186,12 @@ struct ble_eeg_s
     ble_eeg_stim_write_handler_t                        stim_write_handler;
 };
 
+uint8_t eeg_get_sps(void);
+uint8_t eeg_get_gain(void);
+
+void eeg_set_stim(uint8_t new_value);
+uint8_t eeg_get_stim(void);
+
 
 /**@brief Function for initializing the EEG Service.
  *

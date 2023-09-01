@@ -544,9 +544,6 @@ static void saadc_init(void)
     err_code = nrf_drv_saadc_buffer_convert((nrf_saadc_value_t *)m_eeg_packet[1].sample, SAMPLES_IN_BUFFER);
     APP_ERROR_CHECK(err_code);
 
-    err_code = nrf_drv_ppi_init();
-    APP_ERROR_CHECK(err_code);
-
     nrf_drv_timer_config_t timer_cfg = NRF_DRV_TIMER_DEFAULT_CONFIG;
     timer_cfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
     err_code = nrf_drv_timer_init(&m_adc_timer, &timer_cfg, adc_timer_handler);
@@ -636,11 +633,6 @@ static void stim_init(void)
 {
     ret_code_t err_code;
 
-    if (!nrfx_gpiote_is_init())
-    {
-        nrfx_gpiote_init();
-    }
-
     // configure gpio 13-16 in toggle task mode
     nrfx_gpiote_out_config_t pin_outcfg = NRFX_GPIOTE_CONFIG_OUT_TASK_TOGGLE(false); // init_high = false
     nrfx_gpiote_out_init(13, &pin_outcfg);
@@ -664,7 +656,6 @@ static void stim_init(void)
     uint32_t stim_pin15_task_addr = nrfx_gpiote_out_task_addr_get (15);
     uint32_t stim_pin16_task_addr = nrfx_gpiote_out_task_addr_get (16);
 
-    // err_code = nrf_drv_ppi_channel_alloc(&
     err_code = nrf_drv_ppi_channel_alloc(&channel_13_up);
     APP_ERROR_CHECK(err_code);
     err_code = nrf_drv_ppi_channel_assign(channel_13_up, timer_compare_event_addr0, stim_pin13_task_addr);
@@ -710,13 +701,40 @@ static void stim_init(void)
  * This function configure timer, enable it, enable ppi, enable stim pin output
  * the freq is 50 times char value
  */
-static void stim_enable(uint8_t freq) {
+static void stim_enable(uint32_t freq) {
+
+    if (nrfx_timer_is_enabled(&m_stim_timer))
+    {
+        return;
+    }
+
+    /**
+     *          break-before-make
+     *
+     *            1          2
+     *            v          v
+     *            ------------              ------------
+     *            |          |              |          |
+     *            |          | 3          4 |          |
+     *            |          | v          v |          |
+     *          ---          ----------------          -----
+     *          ^ ^            ------------              ---
+     *          | 1            |          |              |
+     *        start            |          |              |
+     *                         |          |              |
+     *                       ---          ----------------
+     */
+
+    // timer's default frequency is 16 * 1024 * 1024 (16M)
+    uint32_t half_period = 16 * 1024 * 1024 / freq / 2;
+
+    NRF_LOG_INFO("stim enable with freq: %d, half_period: %d", freq, half_period);
 
     // configure timer
-    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL0, 10, false);
-    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL1, 50, false);
-    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL2, 60, false);
-    nrf_drv_timer_extended_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL3, 100, NRF_TIMER_SHORT_COMPARE3_CLEAR_MASK, false);
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL0, 16, false);
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL1, half_period, false);
+    nrf_drv_timer_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL2, half_period + 16, false);
+    nrf_drv_timer_extended_compare(&m_stim_timer, NRF_TIMER_CC_CHANNEL3, half_period * 2, NRF_TIMER_SHORT_COMPARE3_CLEAR_MASK, false);
 
     // prepare gpio
     nrfx_gpiote_out_clear(13);
@@ -740,11 +758,17 @@ static void stim_enable(uint8_t freq) {
     APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_15_down));
     APP_ERROR_CHECK(nrf_drv_ppi_channel_enable(channel_16_down));
 
-    nrf_drv_timer_enable(&m_stim_timer);
+    nrfx_timer_enable(&m_stim_timer);
 }
 
 static void stim_disable() {
-    nrf_drv_timer_disable(&m_stim_timer);
+
+    if (!nrfx_timer_is_enabled(&m_stim_timer))
+    {
+        return;
+    }
+
+    nrfx_timer_disable(&m_stim_timer);
 
     // disable ppi channel
     APP_ERROR_CHECK(nrf_drv_ppi_channel_disable(channel_13_up));
@@ -821,22 +845,43 @@ static void eeg_gain_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uin
 
 static void eeg_stim_write_handler (uint16_t conn_handle, ble_eeg_t * p_eeg, uint8_t new_stim)
 {
-    ret_code_t err_code;
-    ble_gatts_value_t gatts_value;
+    // ret_code_t err_code;
+    // ble_gatts_value_t gatts_value;
 
     if (p_eeg->sample_notifying) {
         NRF_LOG_WARNING("stim write %02x rejected for sample notifying", new_stim);
-        return;
-    }
+        eeg_set_stim(0);
 
-    gatts_value.len = sizeof(uint8_t);
-    gatts_value.offset = 0;
-    gatts_value.p_value = &new_stim;
+//
+//        All these codes and apis are shit!!!, set is_value_user to true and access it directly.
+//
+//        gatts_value.len = sizeof(uint8_t);
+//        gatts_value.offset = 0;
+//        gatts_value.p_value = &new_stim;
+//
+//        // SD_BLE_GATTS_VALUE_GET
 
-    err_code = sd_ble_gatts_value_set(conn_handle, p_eeg->sps_handles.value_handle, &gatts_value);
-    if (err_code != NRF_SUCCESS)
-    {
-        NRF_LOG_WARNING("failed to write stim value, error code: %d", err_code);
+//        err_code = sd_ble_gatts_value_set(conn_handle, p_eeg->stim_handles.value_handle, &gatts_value);
+//        if (err_code != NRF_SUCCESS)
+//        {
+//            NRF_LOG_WARNING("failed to clear stim value, error code: %d", err_code);
+//        }
+//        else
+//        {
+//            NRF_LOG_INFO("stim value reset to zero");
+//
+//            uint8_t value;
+//            ble_gatts_value_t g_value;
+//            g_value.len = sizeof(uint8_t);
+//            g_value.offset = 0;
+//            g_value.p_value = &value;
+//            sd_ble_gatts_value_get(conn_handle, p_eeg->stim_handles.value_handle, &g_value);
+//
+//            NRF_LOG_INFO("readback stim value %d", value);
+//
+//            stim_value = 0;
+//        }
+
         return;
     }
 
@@ -1639,6 +1684,7 @@ static void bottom_thread(void * arg)
 
     ks1092_init(&ks1092_dev);
     qmi8658a_init(&qmi8658a_dev);
+    stim_init();
 
     nrf_libuarte_async_config_t nrf_libuarte_async_config = {
             .tx_pin     = TX_PIN_NUMBER,
@@ -1672,6 +1718,9 @@ static void bottom_thread(void * arg)
             NRF_LOG_INFO("Disconnected.");
             break;
         case BE_NOTIFICATION_ENABLED: {
+            stim_disable();
+            eeg_set_stim(0);
+
             err_code = ks1092_write(&ks1092_dev, m_eeg.gain_shadow, KS1092_CHAN_OFF);
             APP_ERROR_CHECK(err_code);
 
@@ -1759,9 +1808,15 @@ static void bottom_thread(void * arg)
             }
             break;
         case BE_STIM: {
+            uint32_t freq = be.u.uval * 50;
 
-            NRF_LOG_INFO("(stim) write freq %d", be.u.uval);
+            NRF_LOG_INFO("(stim) write freq %d", freq);
 
+            stim_disable();
+            if (freq)
+            {
+                stim_enable(freq);
+            }
             break;
         }
 
@@ -1806,7 +1861,17 @@ int main(void)
     NRF_LOG_INFO("reset reason: 0x%08x", reset_reason);
     nrf_power_resetreas_clear(reset_reason);    // NRF_POWER->RESETREAS = NRF_POWER->RESETREAS;
 
+    // init gpiote
+    err_code = nrfx_gpiote_init();
+    APP_ERROR_CHECK(err_code);
+
+    // init ppi
+    err_code = nrf_drv_ppi_init();
+    APP_ERROR_CHECK(err_code);
+
+    // application timer not used, just placeholder in case in future ...
     timers_init();
+
     buttons_leds_init(&erase_bonds);
 
     power_management_init();
