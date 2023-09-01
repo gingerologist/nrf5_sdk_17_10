@@ -51,3 +51,6 @@ RTE/
 
 # gui
 *.uvguix.*
+
+# iar
+*.eww
