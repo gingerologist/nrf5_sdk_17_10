@@ -67,7 +67,7 @@ int main(void)
     APP_ERROR_CHECK(err_code);
 
     NRF_LOG_DEFAULT_BACKENDS_INIT();
-    
+
     NRF_LOG_INFO("hello owuart");
 
     while (true)
