@@ -98,6 +98,7 @@ typedef struct
     nrf_uart_parity_t   parity;             ///< Parity configuration.
     nrf_uart_baudrate_t baudrate;           ///< Baud rate.
     uint8_t             interrupt_priority; ///< Interrupt priority.
+    uint8_t             txd_od_pu;          ///< txd open drain and pullup (for onewire)
 } nrfx_uart_config_t;
 
 /** @brief UART default configuration. */

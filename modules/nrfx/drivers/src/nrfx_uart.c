@@ -83,8 +83,20 @@ static void apply_config(nrfx_uart_t        const * p_instance,
 {
     if (p_config->pseltxd != NRF_UART_PSEL_DISCONNECTED)
     {
-        nrf_gpio_pin_set(p_config->pseltxd);
-        nrf_gpio_cfg_output(p_config->pseltxd);
+        if (p_config->txd_od_pu)
+        {
+            nrf_gpio_cfg(p_config->pseltxd,
+                         NRF_GPIO_PIN_DIR_OUTPUT,
+                         NRF_GPIO_PIN_INPUT_DISCONNECT,
+                         NRF_GPIO_PIN_PULLUP,
+                         NRF_GPIO_PIN_S0D1,       // standard 0 disconnect 1, open drain
+                         NRF_GPIO_PIN_NOSENSE);   // only affect sleep wakeup
+        }
+        else
+        {
+            nrf_gpio_pin_set(p_config->pseltxd);
+            nrf_gpio_cfg_output(p_config->pseltxd);            
+        }
     }
     if (p_config->pselrxd != NRF_UART_PSEL_DISCONNECTED)
     {
