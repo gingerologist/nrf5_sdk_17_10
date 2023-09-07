@@ -83,6 +83,7 @@ static void apply_config(nrfx_uart_t        const * p_instance,
 {
     if (p_config->pseltxd != NRF_UART_PSEL_DISCONNECTED)
     {
+        nrf_gpio_pin_set(p_config->pseltxd);
         if (p_config->txd_od_pu)
         {
             nrf_gpio_cfg(p_config->pseltxd,
@@ -94,13 +95,12 @@ static void apply_config(nrfx_uart_t        const * p_instance,
         }
         else
         {
-            nrf_gpio_pin_set(p_config->pseltxd);
             nrf_gpio_cfg_output(p_config->pseltxd);            
         }
     }
     if (p_config->pselrxd != NRF_UART_PSEL_DISCONNECTED)
     {
-        nrf_gpio_cfg_input(p_config->pselrxd, NRF_GPIO_PIN_NOPULL);
+        nrf_gpio_cfg_input(p_config->pselrxd, NRF_GPIO_PIN_PULLUP);   // TODO
     }
 
     nrf_uart_baudrate_set(p_instance->p_reg, p_config->baudrate);
@@ -242,7 +242,7 @@ void nrfx_uart_uninit(nrfx_uart_t const * p_instance)
         interrupts_disable(p_instance);
     }
 
-    pins_to_default(p_instance);
+    // pins_to_default(p_instance);
 
 #if NRFX_CHECK(NRFX_PRS_ENABLED)
     nrfx_prs_release(p_instance->p_reg);
