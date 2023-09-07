@@ -6,6 +6,8 @@
 #define NRF_LOG_BACKEND_UART_ENABLED                    0
 #define NRF_FPRINTF_FLAG_AUTOMATIC_CR_ON_LF_ENABLED     0
 
+#define NRF_LOG_DEFERRED                                0
+
 // ==== Bare Metal Delay ====
 #define NRFX_SYSTICK_ENABLED                            1
 
